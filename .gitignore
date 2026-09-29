@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# training outputs and exported models
+runs/
+*.pt
+*.onnx
+*.onnx.data
+*.engine
+*.plan
+
+# large media kept outside the repo
+*.mp4
