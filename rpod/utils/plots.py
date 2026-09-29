@@ -44,11 +44,11 @@ def plot_confusion_matrix(metrics, names, path):
     m = metrics.confusion_matrix
     labels = [names[i] for i in range(len(names))] + ['background']
     norm = m / np.maximum(m.sum(1, keepdims=True), 1)
-    fig, axes = plt.subplots(1, 2, figsize=(6 + len(labels), 3 + 0.5 * len(labels)), dpi=120)
+    fig, axes = plt.subplots(1, 2, figsize=(6 + len(labels), 4 + 0.6 * len(labels)), dpi=120)
     for ax, data, title, fmt in ((axes[0], m, 'counts', '{:d}'), (axes[1], norm, 'per true class', '{:.2f}')):
         ax.imshow(data, cmap='Blues')
         ax.set(xticks=range(len(labels)), yticks=range(len(labels)), xlabel='predicted', ylabel='true',
-               title=f'Confusion matrix ({title}) · threshold {metrics.threshold:.3f}')
+               title=f'Confusion matrix, {title}\nthreshold {metrics.threshold:.3f}')
         ax.set_xticklabels(labels, rotation=45, ha='right')
         ax.set_yticklabels(labels)
         top = data.max() if data.size else 1
@@ -78,7 +78,11 @@ def plot_image_grid(items, names, threshold, path):
             if sc > threshold:
                 col = class_color(int(c))
                 d.rectangle(b.tolist(), outline=col, width=2)
-                d.text((b[0] + 3, b[1] + 2), f'{names[int(c)]} {sc:.2f}', fill=col)
+                text = f'{names[int(c)]} {sc:.2f}'
+                x0, y0, x1, y1 = d.textbbox((0, 0), text)
+                ty = b[1] - (y1 - y0) - 4 if b[1] > (y1 - y0) + 4 else b[1]   # above the box, inside if no room
+                d.rectangle([b[0], ty, b[0] + x1 + 4, ty + y1 + 4], fill=col)
+                d.text((b[0] + 2, ty + 2), text, fill=(0, 0, 0))
         canvas = Image.new('RGB', (TILE, TILE), (24, 24, 24))
         canvas.paste(im, ((TILE - im.width) // 2, (TILE - im.height) // 2))
         tiles.append(canvas)
