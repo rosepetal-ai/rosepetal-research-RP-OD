@@ -75,6 +75,14 @@ class DetectionDataset(Dataset):
     def set_epoch(self, epoch):
         self._epoch.value = int(epoch)
 
+    def ground_truth(self, i):
+        """Boxes xyxy in pixels of the original image and model class ids, without reading the image."""
+        r = self.records[i]
+        b = r['boxes'].astype(np.float64) * np.array([r['w'], r['h'], r['w'], r['h']])
+        xyxy = np.stack([b[:, 0] - b[:, 2] / 2, b[:, 1] - b[:, 3] / 2, b[:, 0] + b[:, 2] / 2, b[:, 1] + b[:, 3] / 2], 1)
+        labels = r['cls'] if self.id_map is None else self.id_map[r['cls']]
+        return xyxy.reshape(-1, 4), labels
+
     def read(self, record):
         """Sample at original resolution, boxes in pixels xyxy. Fresh arrays: augmentations can change them freely."""
         image = read_image(record['path'])
@@ -100,7 +108,7 @@ class DetectionDataset(Dataset):
         cxcywh = np.stack([(b[:, 0] + b[:, 2]) / 2, (b[:, 1] + b[:, 3]) / 2, b[:, 2] - b[:, 0], b[:, 3] - b[:, 1]], 1)
         target = {'labels': torch.from_numpy(np.asarray(sample.labels, np.int64)),
                   'boxes': torch.from_numpy(cxcywh.reshape(-1, 4).astype(np.float32))}
-        meta = {'path': record['path'], 'orig_shape': sample.image.shape[:2], 'geom': geom}
+        meta = {'index': i, 'path': record['path'], 'orig_shape': sample.image.shape[:2], 'geom': geom}
         return image, target, meta
 
     def _checked(self, sample, record):

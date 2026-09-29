@@ -8,7 +8,7 @@ Everything is used from Python through one object, `RPOD`.
 ## Install
 
 ```bash
-pip install -e .            # add [dev] for tests and ONNX checks
+pip install -e .            # add [dev] for tests, ONNX checks and the pycocotools comparison
 ```
 
 ## Create a model
@@ -32,6 +32,51 @@ model.info(imgsz=640)                            # parameters per block and GFLO
 | `small_objects` | `True` · `False` | `False` |
 | `decoder_layers` | 3 – 6 | 3 |
 
+## Train
+
+```python
+model = RPOD(backbone='hgnetv2-b2')
+res = model.train('parts.yaml', imgsz=640, epochs=150, patience=20, batch=16, augment=None)
+res['val'].map50_95, res['val'].recall, res['val'].threshold      # final metrics of the best epoch
+model.predict(image)                                                # the object is now the best model
+```
+
+Only data, input size, epochs, patience, batch, device and the augmentation function are chosen; the recipe is
+fixed (RT-DETR / D-FINE / DEIM practice):
+
+| | |
+|---|---|
+| Optimizer | AdamW, lr 1e-4 (backbone 1e-5), weight decay 1e-4 (none on norms, biases, embeddings) |
+| Schedule | warmup, flat, cosine decay over the last 20 % of the epochs; `patience` epochs without improvement start that decay early |
+| Stability | EMA of the weights (what is validated and saved), gradient clipping 0.1, mixed precision on GPU, no dropout |
+| Batch | `batch` is the effective batch: if it does not fit in the GPU it is split into accumulation steps, shown in the log; backbone BatchNorm is frozen below 8 images per step |
+| Best epoch | highest 0.5 · mAP50-95 + 0.5 · recall (IoU ≥ 0.5, at the best-F1 threshold) |
+
+The input needs at least as many candidate positions as the decoder keeps (300): 128×128 or larger.
+
+`runs/train/<name>/` (the name gets a number if it exists):
+
+```
+weights/best.pt   weights/last.pt   results.csv (one row per epoch, written as it goes)   args.yaml
+val/   test/      metrics.json, pr_curves.png, confusion_matrix.png, predictions.jpg (up to 16 images)
+```
+
+`best.pt` stores the recommended threshold (best mean F1 on val), used by default by `predict`, `val` and `export`.
+The test split, if there is one, is evaluated once at the end with that threshold and never used for a decision.
+
+## Validate
+
+```python
+model = RPOD('runs/train/exp/weights/best.pt')
+m = model.val()                                   # val split of the training dataset -> runs/val/exp
+m = model.val(data='other.yaml', split='test')    # another dataset: same class names, any order
+m.map50_95, m.map50, m.precision, m.recall, m.f1, m.threshold, m.mean_iou, m.fp_per_image, m.fitness
+m.per_class, m.confusion_matrix                   # confusion rows: true class + background, columns: predicted + background
+```
+
+mAP follows the COCO definition (checked against pycocotools); precision, recall, F1, mean IoU of the hits and false
+positives per image are at the threshold with IoU ≥ 0.5.
+
 ## Predict and export (trained model)
 
 ```python
@@ -53,7 +98,8 @@ recommended during validation. `export` fuses the neck for inference and checks 
 |---|---|
 | Model, configuration, `info`, `predict`, `export` | done |
 | Data: YOLO format, dataset check with cache, augmentation hook | done |
-| Training, validation metrics and plots | next |
+| Training, validation metrics and plots | done |
+| `rpod` branch in the vision platform (Triton) | next |
 
 ## Datasets
 

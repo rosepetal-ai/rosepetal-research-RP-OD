@@ -201,6 +201,19 @@ def queries_for(max_objects_per_image):
     return max(MIN_QUERIES, 5 * int(max_objects_per_image))
 
 
+def positions(levels, imgsz):
+    """Candidate positions (tokens) the query selection chooses from, for an input of imgsz [height, width]."""
+    return sum((imgsz[0] // 2 ** l) * (imgsz[1] // 2 ** l) for l in levels)
+
+
+def check_input_size(levels, imgsz, num_queries):
+    """The decoder keeps num_queries positions, so the input must have at least that many."""
+    if positions(levels, imgsz) < num_queries:
+        side = next(s for s in range(32, 100000, 32) if positions(levels, [s, s]) >= num_queries)
+        raise ValueError(f'imgsz {imgsz[0]}x{imgsz[1]} gives {positions(levels, imgsz)} candidate positions but the '
+                         f'decoder keeps {num_queries}; use a larger input (at least {side}x{side} for a square one)')
+
+
 # ------------------------------------------------------------------------------------------------ docs
 def _wrap(text, width, prefix):
     lines, cur = [], ''

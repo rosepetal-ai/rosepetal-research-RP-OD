@@ -49,8 +49,12 @@ class SetCriterion(nn.Module):
             losses['bbox'] = losses['giou'] = pred_boxes.sum() * 0.0
         return losses
 
-    def forward(self, outputs, targets):
-        num_boxes = max(1.0, float(sum(len(t['labels']) for t in targets)))
+    def forward(self, outputs, targets, num_boxes=None):
+        """num_boxes: objects of the whole effective batch when gradients are accumulated over several steps, so the
+        summed losses equal those of one big batch. Defaults to the objects of this batch."""
+        if num_boxes is None:
+            num_boxes = sum(len(t['labels']) for t in targets)
+        num_boxes = max(1.0, float(num_boxes))
         losses = {}
 
         def add(out, indices, suffix, nb=num_boxes):

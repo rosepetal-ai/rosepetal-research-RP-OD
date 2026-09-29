@@ -12,9 +12,12 @@ from pathlib import Path
 import torch
 from torch.utils.flop_counter import FlopCounterMode
 
-from .cfg.schema import derive, load_config, queries_for
+from .cfg.schema import check_input_size, derive, load_config, positions, queries_for
+from .data import DetectionDataset, check_dataset, class_map
 from .engine.exporter import export_onnx
 from .engine.predictor import predict as _predict
+from .engine.trainer import _run_dir, train as _train
+from .engine.validator import validate
 from .nn import Detector
 from .utils.checkpoint import build_from_checkpoint, load_checkpoint
 
@@ -30,6 +33,7 @@ class RPOD:
         self.names = None
         self.imgsz = None
         self.threshold = None
+        self.data = None           # dataset the model was trained on
         self.num_queries = queries_for(0)
         if model is not None and str(model).endswith('.pt'):
             if args:
@@ -39,6 +43,7 @@ class RPOD:
             self.cfg = ckpt['config']
             self.names, self.imgsz = ckpt['names'], ckpt['imgsz']
             self.threshold, self.num_queries = ckpt['threshold'], ckpt['num_queries']
+            self.data = ckpt.get('data')
             self.net = build_from_checkpoint(ckpt).eval()
         else:
             self.cfg = load_config(model, **args)
@@ -62,11 +67,12 @@ class RPOD:
         qsel = count(d.enc_output) + count(d.enc_score_head) + count(d.enc_bbox_head)
         blocks = {'backbone': count(net.backbone), 'neck': count(net.neck), 'query selection': qsel,
                   'decoder': count(d) - qsel - count(d.denoising_class_embed)}   # denoising is training-only
+        levels = net.backbone.levels
+        check_input_size(levels, imgsz, d.num_queries)
         device = next(net.parameters()).device
         with torch.no_grad(), FlopCounterMode(display=False) as fc:
             net(torch.zeros(1, 3, *imgsz, device=device))
-        levels = net.backbone.levels
-        tokens = sum((imgsz[0] // 2 ** l) * (imgsz[1] // 2 ** l) for l in levels)
+        tokens = positions(levels, imgsz)
         summary = {**blocks, 'total': sum(blocks.values()), 'gflops': fc.get_total_flops() / 1e9, 'imgsz': imgsz,
                    'tokens': tokens, 'num_queries': d.num_queries}
         if verbose:
@@ -77,6 +83,43 @@ class RPOD:
                 print(f'  {name:16}{n / 1e6:8.2f} M')
             print(f"  {'total':16}{summary['total'] / 1e6:8.2f} M   {summary['gflops']:.1f} GFLOPs")
         return summary
+
+    # -------------------------------------------------------------------------------------------- train / validate
+    def train(self, data, imgsz=640, epochs=150, patience=20, batch=16, device=None, augment=None, name='exp'):
+        """Train on a YOLO dataset (data.yaml). Afterwards this object is the best model (runs/train/<name>/weights/best.pt).
+
+        imgsz: int or [height, width], rounded up to multiples of 32; it is the size used in production too.
+        epochs / patience: after `patience` epochs without improvement the final learning-rate decay starts early.
+        batch: effective batch; if it does not fit in the GPU it is split into accumulation steps (shown in the log).
+        augment: optional function(sample, ctx) -> sample from your augmentation library (training images only).
+        Returns {'dir', 'best_epoch', 'val', 'test'} with the final metrics.
+        """
+        return _train(self, data, _size(imgsz), int(epochs), int(patience), int(batch), device or _default_device(),
+                      augment, name)
+
+    def val(self, data=None, split='val', device=None, batch=16, name='exp'):
+        """Metrics and plots (runs/val/<name>) on a split of the training dataset or of another dataset with the same
+        classes (any order). Uses the checkpoint's threshold, like production."""
+        self._require_trained('validate')
+        data = data or self.data
+        if data is None:
+            raise ValueError('no dataset: pass data="...yaml"')
+        ds = check_dataset(data)
+        if split not in ds['records']:
+            raise ValueError(f"the dataset has no '{split}' split")
+        id_map = class_map(ds['names'], self.names)
+        dataset = DetectionDataset(ds['records'][split], self.imgsz, len(self.names), id_map=id_map)
+        device = device or _default_device()
+        out = _run_dir('runs/val', name)
+        metrics = validate(self.net.to(device), dataset, self.names, device, batch,
+                           threshold=0.5 if self.threshold is None else self.threshold, plots_dir=out)
+        print(f"{split} of {data}, threshold {metrics.threshold:.3f} · plots in {out}")
+        print(metrics.table(self.names))
+        return metrics
+
+    def _adopt(self, net, names, imgsz, threshold, num_queries, ckpt_path, data):
+        self.net, self.names, self.imgsz, self.threshold = net, names, list(imgsz), threshold
+        self.num_queries, self.ckpt_path, self.data = num_queries, Path(ckpt_path), data
 
     # -------------------------------------------------------------------------------------------- use
     def predict(self, source, color='RGB', conf=None, max_det=100, device=None):

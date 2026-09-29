@@ -4,6 +4,8 @@ Scale = the largest that fits the whole image (upscaling allowed), computed in f
 image centered (odd pixel to the bottom/right); padding 114; bilinear resampling with half-pixel centers and
 antialias, in float32 without rounding back to uint8; then x / 255. The model applies its own normalization inside.
 """
+import warnings
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -25,8 +27,17 @@ def letterbox(rgb, out_h, out_w, device='cpu', antialias=True):
     h, w = rgb.shape[:2]
     geom = letterbox_geometry(h, w, out_h, out_w)
     _, rh, rw, top, left = geom
-    x = torch.from_numpy(np.ascontiguousarray(rgb)).to(device).permute(2, 0, 1)[None].float()   # one copy at most
+    x = _as_tensor(np.ascontiguousarray(rgb)).to(device).permute(2, 0, 1)[None].float()   # one copy at most
     x = F.interpolate(x, size=(rh, rw), mode='bilinear', align_corners=False, antialias=antialias)
     out = torch.full((1, 3, out_h, out_w), float(PAD_VALUE), device=device)
     out[..., top:top + rh, left:left + rw] = x
     return out[0] * float(_F(1.0) / _F(255.0)), geom
+
+
+def _as_tensor(array):
+    """Shares memory with the array. Read-only arrays are fine: nothing writes to it, the next step copies."""
+    if array.flags.writeable:
+        return torch.from_numpy(array)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', UserWarning)
+        return torch.from_numpy(array)

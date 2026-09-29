@@ -7,6 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .ops import contiguous_grad
+
 
 @torch.no_grad()
 def fuse_conv_bn(conv, bn):
@@ -127,7 +129,7 @@ class Neck(nn.Module):
         top = proj[self.levels[-1]]
         if len(self.attention):
             b, c, h, w = top.shape
-            tokens = top.flatten(2).transpose(1, 2)
+            tokens = contiguous_grad(top).flatten(2).transpose(1, 2)
             pos = sincos_pos_2d(h, w, c, device=top.device).to(tokens.dtype)
             for layer in self.attention:
                 tokens = layer(tokens, pos)

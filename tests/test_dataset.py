@@ -34,6 +34,13 @@ def test_valid_dataset(tmp_path):
     assert ds['stats']['train']['images'] == 6 and ds['warnings'] == []
 
 
+def test_relative_yaml_without_path_key(tmp_path, monkeypatch):
+    y = make_dataset(tmp_path / 'd', {'train': 2, 'val': 1})
+    y.write_text(y.read_text().replace('path: .\n', ''))
+    monkeypatch.chdir(tmp_path)
+    assert check_dataset('d/data.yaml', use_cache=False)['stats']['train']['images'] == 2
+
+
 def test_label_path_convention():
     assert label_path('/d/images/train/a.jpg') == '/d/labels/train/a.txt'
     assert label_path('/d/pics/a.jpg') == '/d/pics/a.txt'

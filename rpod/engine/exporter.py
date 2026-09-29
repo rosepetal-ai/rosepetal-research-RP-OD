@@ -8,6 +8,7 @@ The TensorRT engine is built by the platform on each machine.
 """
 import copy
 import json
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -44,8 +45,10 @@ def export_onnx(net, backbone, names, imgsz, threshold, output_dir, check=True):
     reference = copy.deepcopy(net).cpu().eval()
     fused = copy.deepcopy(reference).fuse()
     x = torch.rand(1, 3, int(imgsz[0]), int(imgsz[1]))
-    torch.onnx.export(_Exportable(fused), (x,), str(onnx_path), input_names=['images'], output_names=['dets', 'labels'],
-                      opset_version=OPSET, dynamo=False)
+    with warnings.catch_warnings():   # tracer notices about constant shapes: expected for a fixed-size export
+        warnings.simplefilter('ignore')
+        torch.onnx.export(_Exportable(fused), (x,), str(onnx_path), input_names=['images'], output_names=['dets', 'labels'],
+                          opset_version=OPSET, dynamo=False)
     (output_dir / 'config.json').write_text(json.dumps(platform_config(backbone, names, imgsz, threshold), indent=2))
     if check:
         _check(onnx_path, reference, x)

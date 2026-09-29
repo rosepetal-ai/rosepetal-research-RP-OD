@@ -16,11 +16,12 @@ dependencies = [
     "scipy",
     "pyyaml",
     "pillow",
+    "matplotlib",
 ]
 
 [project.optional-dependencies]
 export = ["onnx", "onnxruntime"]
-dev = ["pytest", "onnx", "onnxruntime"]
+dev = ["pytest", "onnx", "onnxruntime", "pycocotools"]
 
 [tool.setuptools.packages.find]
 include = ["rpod*"]

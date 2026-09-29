@@ -12,6 +12,7 @@ import torch.nn as nn
 
 from ..utils.boxes import cxcywh_to_xyxy, inverse_sigmoid, xyxy_to_cxcywh
 from .deform_attn import MSDeformableAttention
+from .ops import contiguous_grad
 
 
 def bias_init_with_prob(p=0.01):
@@ -161,7 +162,7 @@ class Decoder(nn.Module):
 
     def forward(self, feats, targets=None):
         spatial_shapes = [(f.shape[2], f.shape[3]) for f in feats]
-        memory = torch.cat([f.flatten(2).transpose(1, 2) for f in feats], 1)  # [B, 8400, d] at 640
+        memory = torch.cat([contiguous_grad(f).flatten(2).transpose(1, 2) for f in feats], 1)  # [B, 8400, d] at 640
         bs = memory.shape[0]
 
         dn_embed = dn_box_unact = attn_mask = dn_meta = None

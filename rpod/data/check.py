@@ -44,9 +44,10 @@ def load_data_yaml(path):
         raise DatasetError(f'data file not found: {path}')
     with open(path) as f:
         spec = yaml.safe_load(f) or {}
-    root = Path(spec.get('path') or path.parent)
+    base = path.resolve().parent
+    root = Path(spec['path']) if spec.get('path') else base
     if not root.is_absolute():
-        root = (path.parent / root).resolve()
+        root = (base / root).resolve()
     names = parse_names(spec.get('names'), path)
     if 'nc' in spec and int(spec['nc']) != len(names):
         raise DatasetError(f"{path}: nc is {spec['nc']} but names has {len(names)} classes")
