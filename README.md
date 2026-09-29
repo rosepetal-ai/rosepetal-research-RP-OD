@@ -52,8 +52,30 @@ recommended during validation. `export` fuses the neck for inference and checks 
 | Part | State |
 |---|---|
 | Model, configuration, `info`, `predict`, `export` | done |
-| Data (YOLO format, validation of the dataset, augmentation hook) | next |
+| Data: YOLO format, dataset check with cache, augmentation hook | done |
 | Training, validation metrics and plots | next |
+
+## Datasets
+
+YOLO format: a `data.yaml` with `train` and `val` (required), `test` (optional, only ever used for a final
+evaluation), and `names`. Every image and label is checked once (cached until a file changes): unreadable
+images, images that are not 8-bit, segmentation polygons, classes out of range and boxes outside the image are
+errors, listed with file and reason; identical images across splits and a missing `test` are warnings.
+
+```python
+from rpod.data import check_dataset
+ds = check_dataset('parts.yaml')      # raises with the full list of errors; returns stats and warnings
+```
+
+There is no augmentation inside RP-OD. An external library plugs in with one function, applied to training
+samples before the letterbox (see `rpod/data/dataset.py` for the full contract):
+
+```python
+def augment(sample, ctx):
+    # sample.image uint8 RGB, sample.boxes xyxy pixels, sample.labels, sample.path
+    # ctx.sample(k), ctx.epoch, ctx.epochs, ctx.imgsz, ctx.rng
+    return sample
+```
 
 ## Tests
 
