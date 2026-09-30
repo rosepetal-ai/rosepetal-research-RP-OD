@@ -22,13 +22,16 @@ def test_schedule_warmup_flat_final_and_patience():
     assert s.end == 6 and s.phase(4) == 'final' and s.factor(5, 99) < 0.1
 
 
-def test_param_groups_backbone_lower_lr_and_no_decay_on_1d():
-    groups = _param_groups(make_net(), RECIPE)
+def test_param_groups_learning_rates_and_no_decay_on_1d():
+    net = make_net()
+    names = {id(p): n for n, p in net.named_parameters()}
+    groups = _param_groups(net, RECIPE)
+    assert sum(len(g['params']) for g in groups) == len(names)
     for g in groups:
-        is_backbone = g['base_lr'] == RECIPE['backbone_lr']
-        assert g['base_lr'] in (RECIPE['lr'], RECIPE['backbone_lr'])
-        if g['weight_decay'] == 0:
-            assert all(p.ndim == 1 or p.ndim == 2 and not is_backbone for p in g['params'])
+        for p in g['params']:
+            n = names[id(p)]
+            assert g['base_lr'] == (RECIPE['backbone_lr'] if n.startswith('backbone.') else RECIPE['lr'])
+            assert (g['weight_decay'] == 0) == (p.ndim == 1 or 'embed' in n)
 
 
 def test_accumulation_equals_one_big_batch():

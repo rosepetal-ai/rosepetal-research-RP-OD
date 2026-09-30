@@ -85,12 +85,13 @@ class RPOD:
         return summary
 
     # -------------------------------------------------------------------------------------------- train / validate
-    def train(self, data, imgsz=640, epochs=150, patience=20, batch=16, device=None, augment=None, name='exp'):
+    def train(self, data, imgsz=640, epochs=150, patience=20, batch=4, device=None, augment=None, name='exp'):
         """Train on a YOLO dataset (data.yaml). Afterwards this object is the best model (runs/train/<name>/weights/best.pt).
 
         imgsz: int or [height, width], rounded up to multiples of 32; it is the size used in production too.
         epochs / patience: after `patience` epochs without improvement the final learning-rate decay starts early.
         batch: effective batch; if it does not fit in the GPU it is split into accumulation steps (shown in the log).
+            4 by default: more optimizer steps per epoch trained clearly better on small datasets.
         augment: optional function(sample, ctx) -> sample from your augmentation library (training images only).
         Returns {'dir', 'best_epoch', 'val', 'test'} with the final metrics.
         """

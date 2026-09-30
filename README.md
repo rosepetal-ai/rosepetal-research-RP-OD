@@ -36,21 +36,25 @@ model.info(imgsz=640)                            # parameters per block and GFLO
 
 ```python
 model = RPOD(backbone='hgnetv2-b2')
-res = model.train('parts.yaml', imgsz=640, epochs=150, patience=20, batch=16, augment=None)
+res = model.train('parts.yaml', imgsz=640, epochs=150, patience=20, batch=4, augment=None)
 res['val'].map50_95, res['val'].recall, res['val'].threshold      # final metrics of the best epoch
 model.predict(image)                                                # the object is now the best model
 ```
 
 Only data, input size, epochs, patience, batch, device and the augmentation function are chosen; the recipe is
-fixed (RT-DETR / D-FINE / DEIM practice):
+fixed (RT-DETR / D-FINE / DEIM practice, adjusted with experiments on a real dataset):
 
 | | |
 |---|---|
-| Optimizer | AdamW, lr 1e-4 (backbone 1e-5), weight decay 1e-4 (none on norms, biases, embeddings) |
+| Optimizer | AdamW, lr 1e-4 for the whole network including the backbone, weight decay 1e-4 (none on norms, biases, embeddings) |
 | Schedule | warmup, flat, cosine decay over the last 20 % of the epochs; `patience` epochs without improvement start that decay early |
 | Stability | EMA of the weights (what is validated and saved), gradient clipping 0.1, mixed precision on GPU, no dropout |
-| Batch | `batch` is the effective batch: if it does not fit in the GPU it is split into accumulation steps, shown in the log; backbone BatchNorm is frozen below 8 images per step |
+| Batch | `batch` is the effective batch, 4 by default: if it does not fit in the GPU it is split into accumulation steps, shown in the log; backbone BatchNorm is frozen below 8 images per step |
 | Best epoch | highest 0.5 · mAP50-95 + 0.5 · recall (IoU ≥ 0.5, at the best-F1 threshold) |
+
+Why these values: on a real dataset (77 training images), a backbone learning rate of 1e-4 instead of the usual
+1e-5 gave +0.12 mAP50-95 on validation, and batch 4 instead of 8 another +0.06 (confirmed with three seeds).
+Removing the flat phase, gradient clipping 10, weight decay 1e-3 and 300 epochs did not help.
 
 The input needs at least as many candidate positions as the decoder keeps (300): 128×128 or larger.
 

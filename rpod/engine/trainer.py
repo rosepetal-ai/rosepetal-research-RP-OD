@@ -30,7 +30,7 @@ from ..nn import Detector
 from ..utils.checkpoint import load_weights, save_checkpoint
 from .validator import validate
 
-RECIPE = dict(lr=1e-4, backbone_lr=1e-5, weight_decay=1e-4, betas=(0.9, 0.999), warmup_steps=2000, warmup_max_fraction=0.05,
+RECIPE = dict(lr=1e-4, backbone_lr=1e-4, weight_decay=1e-4, betas=(0.9, 0.999), warmup_steps=2000, warmup_max_fraction=0.05,
               final_fraction=0.2, final_lr_ratio=0.05, ema_decay=0.9999, ema_tau=2000, clip_grad=0.1,
               freeze_backbone_bn_below=8, seed=0)
 CSV_FIELDS = ['epoch', 'phase', 'lr', 'loss', 'vfl', 'bbox', 'giou', 'map50_95', 'map50', 'precision', 'recall', 'f1',
@@ -90,7 +90,8 @@ class Schedule:
 
 
 def _param_groups(net, r):
-    """Backbone at a 10x lower learning rate; no weight decay on biases, norms and embeddings."""
+    """Backbone and the rest at their own learning rates (equal: a 10x slower backbone, the usual DETR choice, learned
+    much worse on a small real dataset); no weight decay on biases, norms and embeddings."""
     groups = {}
     for n, p in net.named_parameters():
         if not p.requires_grad:
