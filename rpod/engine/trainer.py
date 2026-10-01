@@ -175,9 +175,17 @@ def _run_dir(project, name):
     return path
 
 
-def train(model, data, imgsz, epochs, patience, batch, device, augment, name, project='runs/train', workers=None):
-    """Trains `model` (an RPOD) in place and returns {'dir', 'best_epoch', 'val', 'test'}."""
+def train(model, data, imgsz, epochs, patience, batch, device, augment, name, project='runs/train', workers=None,
+          save_state=False, resume=None):
+    """Trains `model` (an RPOD) in place and returns {'dir', 'best_epoch', 'val', 'test'}.
+
+    save_state: also write weights/state.pt after every epoch (optimizer, EMA, schedule, best so far), so a long run
+    that gets interrupted can continue with resume=<that file> and the same arguments. Not part of RPOD.train.
+    """
     r = RECIPE
+    state = torch.load(resume, map_location='cpu', weights_only=True) if resume else None
+    if state and state['args']['model'] != to_dict(model.cfg):
+        raise ValueError(f'{resume} is a run of another model configuration')
     torch.manual_seed(r['seed'])
     np.random.seed(r['seed'])
     random.seed(r['seed'])
@@ -197,8 +205,11 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     num_queries = queries_for(stats['max_objects_per_image'])
     d = derive(model.cfg, len(names), num_queries)
     check_input_size(d['levels'], imgsz, num_queries)
-    net = Detector(d, pretrained_backbone=True)
-    if model.net is not None:
+    net = Detector(d, pretrained_backbone=state is None)
+    if state:
+        net.load_state_dict(state['net'])
+        log(f"resuming {state['args']['name']} at epoch {state['epoch'] + 1}")
+    elif model.net is not None:
         report = load_weights(net, model.net.state_dict(), model.net.backbone.levels, net.backbone.levels)
         log(f"starting from the current weights: {report['summary']}")
     net.to(device)
@@ -206,7 +217,8 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     matcher = HungarianMatcher()
     criterion = SetCriterion(len(names), matcher)
 
-    micro = _micro_batch(net, criterion, batch, imgsz, device, amp_dtype, stats['max_objects_per_image'])
+    micro = state['micro'] if state else _micro_batch(net, criterion, batch, imgsz, device, amp_dtype,
+                                                      stats['max_objects_per_image'])
     accumulate = batch // micro
     freeze_bn = micro < r['freeze_backbone_bn_below']
     if freeze_bn:
@@ -219,7 +231,8 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     val_set = DetectionDataset(ds['records']['val'], imgsz, len(names))
     loader = DataLoader(train_set, batch_size=micro, shuffle=True, num_workers=workers, collate_fn=collate,
                         drop_last=len(train_set) >= micro, pin_memory=device.type == 'cuda',
-                        persistent_workers=workers > 0, generator=torch.Generator().manual_seed(r['seed']))
+                        persistent_workers=workers > 0,
+                        generator=torch.Generator().manual_seed(r['seed'] + (state['epoch'] if state else 0)))
     steps_per_epoch = max(1, math.ceil(len(loader) / accumulate))
     optimizer = torch.optim.AdamW(_param_groups(net, r), betas=r['betas'])
     scaler = torch.amp.GradScaler('cuda', enabled=amp_dtype == torch.float16)
@@ -227,23 +240,36 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     schedule = Schedule(epochs, steps_per_epoch, r)
     params = [p for p in net.parameters() if p.requires_grad]
 
+    best_fitness, best_epoch, stale, epoch = -1.0, -1, 0, 0
+    if state:
+        ema.ema.load_state_dict(state['ema'])
+        ema.updates = state['ema_updates']
+        optimizer.load_state_dict(state['optimizer'])
+        scaler.load_state_dict(state['scaler'])
+        schedule.final_start = state['final_start']
+        best_fitness, best_epoch, stale, epoch = state['best_fitness'], state['best_epoch'], state['stale'], state['epoch']
+
     # ---- run folder
-    run = _run_dir(project, name)
-    (run / 'weights').mkdir()
+    run = Path(state['run']) if state else _run_dir(project, name)
+    if not state:
+        (run / 'weights').mkdir()
     args = {'data': str(Path(data).resolve()), 'imgsz': list(imgsz), 'epochs': epochs, 'patience': patience, 'batch': batch,
             'device': str(device), 'augment': getattr(augment, '__name__', None) if augment else None, 'name': run.name,
             'model': to_dict(model.cfg), 'classes': names, 'num_queries': num_queries, 'micro_batch': micro,
             'accumulate': accumulate, 'backbone_bn_frozen': freeze_bn, 'recipe': {k: list(v) if isinstance(v, tuple) else v
                                                                                    for k, v in r.items()}}
-    (run / 'args.yaml').write_text(yaml.safe_dump(args, sort_keys=False, allow_unicode=True))
-    csv_file = open(run / 'results.csv', 'w', newline='')
+    if state:
+        args['name'] = state['args']['name']
+    else:
+        (run / 'args.yaml').write_text(yaml.safe_dump(args, sort_keys=False, allow_unicode=True))
+    csv_file = open(run / 'results.csv', 'a' if state else 'w', newline='')
     writer = csv.DictWriter(csv_file, fieldnames=CSV_FIELDS)
-    writer.writeheader()
+    if not state:
+        writer.writeheader()
     csv_file.flush()
     extra = {'data': args['data']}
     log(f'results: {run}')
 
-    best_fitness, best_epoch, stale, epoch = -1.0, -1, 0, 0
     try:
         while epoch < schedule.end:
             t0 = time.time()
@@ -309,6 +335,13 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                 schedule.final_start = epoch + 1
                 log(f'no improvement for {patience} epochs: starting the final learning-rate decay '
                     f'({schedule.final_epochs} epochs, ends at epoch {schedule.end})')
+            if save_state:
+                tmp = run / 'weights' / 'state.pt.tmp'
+                torch.save({'run': str(run.resolve()), 'epoch': epoch + 1, 'net': net.state_dict(), 'ema': ema.ema.state_dict(),
+                            'ema_updates': ema.updates, 'optimizer': optimizer.state_dict(), 'scaler': scaler.state_dict(),
+                            'final_start': schedule.final_start, 'best_fitness': best_fitness, 'best_epoch': best_epoch,
+                            'stale': stale, 'micro': micro, 'args': args}, tmp)
+                os.replace(tmp, run / 'weights' / 'state.pt')
             epoch += 1
     finally:
         csv_file.close()

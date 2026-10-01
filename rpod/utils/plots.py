@@ -12,6 +12,8 @@ from ..engine.predictor import class_color  # noqa: E402
 
 GRID_IMAGES = 16
 TILE = 480
+MAX_LEGEND = 20          # more classes than this: no legend in the PR plot
+MAX_CELL_TEXT = 30       # more classes than this: no numbers in the confusion matrix cells
 
 
 def plot_pr_curves(metrics, names, path):
@@ -31,10 +33,11 @@ def plot_pr_curves(metrics, names, path):
     ax.set(xlim=(0, 1.01), ylim=(0, 1.01), xlabel='recall', ylabel='precision',
            title=f'Precision-recall (IoU 0.5) · dots: threshold {thr:.3f}')
     ax.grid(alpha=0.3)
-    if ax.get_legend_handles_labels()[0]:
-        ax.legend(loc='lower left', fontsize=8)
-    else:
+    handles = ax.get_legend_handles_labels()[0]
+    if not handles:
         ax.text(0.5, 0.5, 'no objects in this split', ha='center', va='center', color='gray')
+    elif len(handles) <= MAX_LEGEND:
+        ax.legend(loc='lower left', fontsize=8)
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
@@ -44,13 +47,16 @@ def plot_confusion_matrix(metrics, names, path):
     m = metrics.confusion_matrix
     labels = [names[i] for i in range(len(names))] + ['background']
     norm = m / np.maximum(m.sum(1, keepdims=True), 1)
-    fig, axes = plt.subplots(1, 2, figsize=(6 + len(labels), 4 + 0.6 * len(labels)), dpi=120)
+    n = len(labels)
+    fig, axes = plt.subplots(1, 2, figsize=(min(6 + n, 28), min(4 + 0.6 * n, 16)), dpi=120)
     for ax, data, title, fmt in ((axes[0], m, 'counts', '{:d}'), (axes[1], norm, 'per true class', '{:.2f}')):
         ax.imshow(data, cmap='Blues')
         ax.set(xticks=range(len(labels)), yticks=range(len(labels)), xlabel='predicted', ylabel='true',
                title=f'Confusion matrix, {title}\nthreshold {metrics.threshold:.3f}')
-        ax.set_xticklabels(labels, rotation=45, ha='right')
-        ax.set_yticklabels(labels)
+        ax.set_xticklabels(labels, rotation=45 if n <= MAX_CELL_TEXT else 90, ha='right', fontsize=8 if n <= MAX_CELL_TEXT else 5)
+        ax.set_yticklabels(labels, fontsize=8 if n <= MAX_CELL_TEXT else 5)
+        if n > MAX_CELL_TEXT:
+            continue
         top = data.max() if data.size else 1
         for i in range(len(labels)):
             for j in range(len(labels)):

@@ -75,3 +75,28 @@ def test_train_end_to_end(tmp_path, monkeypatch):
     assert m.val(split='test', device='cpu').threshold == m.threshold
     reloaded = RPOD(run / 'weights' / 'best.pt')
     assert reloaded.data == str(data.resolve()) and reloaded.threshold == m.threshold
+
+
+def test_interrupted_run_resumes(tmp_path, monkeypatch):
+    """save_state writes the whole training state every epoch; resume continues the same run where it stopped."""
+    from rpod.engine import trainer as T
+    monkeypatch.setenv('RPOD_WORKERS', '0')
+    monkeypatch.chdir(tmp_path)
+    data = make_dataset(tmp_path / 'data', {'train': 4, 'val': 2})
+
+    def crash_in_third_epoch(sample, ctx):
+        if ctx.epoch == 2:
+            raise KeyboardInterrupt
+        return sample
+
+    with pytest.raises(KeyboardInterrupt):
+        T.train(RPOD(backbone='hgnetv2-b0'), data, [128, 128], 4, 4, 2, 'cpu', crash_in_third_epoch, 't', save_state=True)
+    run = tmp_path / 'runs' / 'train' / 't'
+    assert torch.load(run / 'weights' / 'state.pt', weights_only=True)['epoch'] == 2
+    with pytest.raises(ValueError, match='another model configuration'):
+        T.train(RPOD(backbone='hgnetv2-b2'), data, [128, 128], 4, 4, 2, 'cpu', None, 't', resume=run / 'weights' / 'state.pt')
+    res = T.train(RPOD(backbone='hgnetv2-b0'), data, [128, 128], 4, 4, 2, 'cpu', None, 't', save_state=True,
+                  resume=run / 'weights' / 'state.pt')
+    assert res['dir'] == run and not (tmp_path / 'runs' / 'train' / 't2').exists()
+    assert [int(r['epoch']) for r in csv.DictReader(open(run / 'results.csv'))] == [1, 2, 3, 4]
+    assert torch.load(run / 'weights' / 'state.pt', weights_only=True)['epoch'] == 4

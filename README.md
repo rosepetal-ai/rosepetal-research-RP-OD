@@ -127,6 +127,12 @@ def augment(sample, ctx):
     return sample
 ```
 
+## COCO benchmark and pretraining
+
+`benchmarks/coco/` trains and evaluates RP-OD on COCO 2017 with the protocol of the papers (AP with pycocotools,
+640×640), using the standard augmentations through the hook. The model it trains also serves as pretrained weights for
+any smaller configuration.
+
 ## Tests
 
 ```bash

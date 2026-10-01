@@ -82,3 +82,28 @@ def test_partial_loading_across_knobs():
     w = dst.state_dict()['decoder.layers.0.cross_attn.attention_weights.weight'].view(8, 4, 4, -1)
     ws = sd['decoder.layers.0.cross_attn.attention_weights.weight'].view(8, 3, 4, -1)
     assert torch.equal(w[:, 1:], ws) and torch.equal(w[:, 0], ws[:, 0])     # P3..P5 copied, new P2 starts as P3
+
+
+def test_maximum_model_loads_fully_into_every_reduced_config():
+    """The pretraining plan: one model with every option at its maximum feeds any smaller configuration."""
+    src = make_net(num_classes=80, neck_size='l', small_objects=True, decoder_layers=6)
+    for neck in ('s', 'm', 'l'):
+        for small in (False, True):
+            for layers in (3, 6):
+                dst = make_net(num_classes=80, neck_size=neck, small_objects=small, decoder_layers=layers)
+                report = load_weights(dst, src.state_dict(), src.backbone.levels, dst.backbone.levels)
+                assert report['loaded_fraction'] == 1.0, (neck, small, layers, report['summary'])
+
+
+def test_decoder_truncation_is_exact():
+    """Each decoder layer is trained as a full detector: keeping the first N gives exactly layer N's predictions."""
+    full = make_net(decoder_layers=6)
+    short = make_net(decoder_layers=3)
+    load_weights(short, full.state_dict())
+    x = torch.rand(1, 3, 128, 160)
+    with torch.no_grad():
+        out_short = short(x)
+        full.decoder.num_layers = 3
+        out_full = full(x)
+    assert torch.equal(out_short['pred_logits'], out_full['pred_logits'])
+    assert torch.equal(out_short['pred_boxes'], out_full['pred_boxes'])
