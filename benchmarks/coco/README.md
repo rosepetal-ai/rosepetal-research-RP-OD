@@ -10,6 +10,7 @@ through the augment hook.
 | `augment.py` | RT-DETR / D-FINE augmentations as an `augment(sample, ctx)` function |
 | `train_coco.py` | One training, any configuration, optionally starting from another checkpoint (`--init`) |
 | `eval_coco.py` | AP with pycocotools on the official annotations; `--decoder-layers N` keeps the first N layers |
+| `dashboard.py` | Self-refreshing page with the state of a run (progress, ETA, curves, official numbers), served by Jupyter at `/files/dashboard/index.html` |
 
 Protocol, as the papers we compare with: train2017 → val2017, 640×640, 300 queries, up to 100 detections, AP by
 pycocotools. Differences: letterbox instead of stretching to a square, no multi-scale input sizes.
