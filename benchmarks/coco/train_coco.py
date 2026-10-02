@@ -30,6 +30,7 @@ p.add_argument('--name')
 p.add_argument('--data', default='coco/coco.yaml')
 p.add_argument('--epochs', type=int, default=72)
 p.add_argument('--batch', type=int, default=32)
+p.add_argument('--lr', type=float, default=None, help='default: the library recipe')
 p.add_argument('--backbone-lr', type=float, default=None, help='default: the library recipe')
 p.add_argument('--backbone', default='hgnetv2-b2')
 p.add_argument('--neck-size', default='l')
@@ -46,11 +47,13 @@ if a.resume:      # same configuration, recipe, data, epochs and batch as the in
     a.name, a.data, a.epochs, a.batch = run_args['name'], run_args['data'], run_args['epochs'], run_args['batch']
     a.backbone, a.neck_size = cfg['backbone'], cfg['neck']['size']
     a.small_objects, a.decoder_layers = int(cfg['neck']['small_objects']), cfg['decoder']['layers']
-    a.backbone_lr, a.init = run_args['recipe']['backbone_lr'], None
+    a.lr, a.backbone_lr, a.init = run_args['recipe']['lr'], run_args['recipe']['backbone_lr'], None
 elif not a.name:
     p.error('--name is required (unless --resume)')
 
 trainer.queries_for = lambda max_objects: QUERIES
+if a.lr is not None:
+    trainer.RECIPE['lr'] = a.lr
 if a.backbone_lr is not None:
     trainer.RECIPE['backbone_lr'] = a.backbone_lr
 model = RPOD(backbone=a.backbone, neck_size=a.neck_size, small_objects=bool(a.small_objects),

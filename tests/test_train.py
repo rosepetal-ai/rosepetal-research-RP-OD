@@ -56,13 +56,16 @@ def test_accumulation_equals_one_big_batch():
     assert worst < 1e-3
 
 
-def test_train_end_to_end(tmp_path, monkeypatch):
+def test_train_end_to_end(tmp_path, monkeypatch, capsys):
+    from rpod.engine import trainer as T
+    monkeypatch.setattr(T, 'PROGRESS_SECONDS', 0)                    # a progress line after every step
     monkeypatch.setenv('RPOD_WORKERS', '0')
     monkeypatch.chdir(tmp_path)
     data = make_dataset(tmp_path / 'data', {'train': 4, 'val': 2, 'test': 2})
     m = RPOD(backbone='hgnetv2-b0')
     res = m.train(data, imgsz=128, epochs=3, patience=1, batch=2, device='cpu', name='t')
     run = res['dir']
+    assert '  epoch 1/3 [' in capsys.readouterr().out
     rows = list(csv.DictReader(open(run / 'results.csv')))
     assert 1 <= len(rows) <= 3 and {'map50_95', 'recall', 'fitness', 'threshold', 'phase'} <= rows[0].keys()
     args = yaml.safe_load(open(run / 'args.yaml'))

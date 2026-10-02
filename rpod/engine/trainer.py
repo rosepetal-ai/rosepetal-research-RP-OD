@@ -33,6 +33,7 @@ from .validator import validate
 RECIPE = dict(lr=1e-4, backbone_lr=1e-4, weight_decay=1e-4, betas=(0.9, 0.999), warmup_steps=2000, warmup_max_fraction=0.05,
               final_fraction=0.2, final_lr_ratio=0.05, ema_decay=0.9999, ema_tau=2000, clip_grad=0.1,
               freeze_backbone_bn_below=8, seed=0)
+PROGRESS_SECONDS = 120      # one progress line this often inside an epoch (none in epochs shorter than this)
 CSV_FIELDS = ['epoch', 'phase', 'lr', 'loss', 'vfl', 'bbox', 'giou', 'map50_95', 'map50', 'precision', 'recall', 'f1',
               'threshold', 'mean_iou', 'fp_per_image', 'fitness', 'best', 'seconds']
 
@@ -166,6 +167,14 @@ def _micro_batch(net, criterion, batch, imgsz, device, amp_dtype, max_objects):
     raise RuntimeError(f'the model does not fit in GPU memory even with 1 image per step at {imgsz[0]}x{imgsz[1]}')
 
 
+def _progress(epoch, epochs, step, steps, loss, images, seconds, width=20):
+    done = step / steps
+    bar = '█' * round(width * done) + '░' * (width - round(width * done))
+    left = seconds / step * (steps - step) / 60
+    return (f'  epoch {epoch + 1}/{epochs} [{bar}] {100 * done:3.0f}% · {step}/{steps} steps · loss {loss:.3f} · '
+            f'{images / seconds:.0f} img/s · ~{left:.0f} min left')
+
+
 def _run_dir(project, name):
     base = Path(project) / name
     path, k = base, 2
@@ -275,7 +284,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
             t0 = time.time()
             train_set.set_epoch(epoch)
             _set_train_mode(net, freeze_bn)
-            sums, count = {}, 0
+            sums, count, seen, next_report = {}, 0, 0, t0 + PROGRESS_SECONDS
             it = iter(loader)
             for step in range(steps_per_epoch):
                 factor = schedule.factor(epoch, step)
@@ -306,6 +315,11 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 ema.update(net)
+                seen += sum(len(images) for images, _, _ in group)
+                if time.time() >= next_report:
+                    next_report = time.time() + PROGRESS_SECONDS
+                    log(_progress(epoch, schedule.end, step + 1, steps_per_epoch, sums['loss'] * accumulate / count,
+                                  seen, time.time() - t0))
             means = {k: v * accumulate / max(count, 1) for k, v in sums.items()}   # per effective batch
 
             metrics = validate(ema.ema, val_set, names, device, micro, amp_dtype=amp_dtype)

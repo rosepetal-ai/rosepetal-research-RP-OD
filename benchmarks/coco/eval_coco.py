@@ -2,7 +2,8 @@
 regions ignored, up to 100 detections per image, AP by object size).
 
 --decoder-layers N evaluates the same weights keeping only the first N decoder layers, without retraining: every layer
-was trained with its own loss, so each one is already a complete detector.
+was trained with its own loss, so each one is already a complete detector. --neck-size and --small-objects load the
+weights into a smaller neck or without P2 (approximate without fine-tuning: shows how much a reduction loses).
 
     python eval_coco.py runs/train/max_b2/weights/best.pt
     python eval_coco.py runs/train/max_b2/weights/best.pt --decoder-layers 3
@@ -33,16 +34,19 @@ STATS = ['AP', 'AP50', 'AP75', 'APs', 'APm', 'APl', 'AR1', 'AR10', 'AR100', 'ARs
 
 
 @torch.no_grad()
-def evaluate(ckpt, data='coco/coco.yaml', ann='coco/annotations/instances_val2017.json', decoder_layers=None, batch=32,
-             workers=8):
+def evaluate(ckpt, data='coco/coco.yaml', ann='coco/annotations/instances_val2017.json', decoder_layers=None,
+             neck_size=None, small_objects=None, batch=32, workers=8):
     model = RPOD(ckpt)
     cfg = model.cfg
-    if decoder_layers and decoder_layers != cfg.decoder.layers:
-        if decoder_layers > cfg.decoder.layers:
-            raise ValueError(f'the checkpoint has {cfg.decoder.layers} decoder layers')
-        cfg = dataclasses.replace(cfg, decoder=dataclasses.replace(cfg.decoder, layers=decoder_layers))
+    if decoder_layers and decoder_layers > cfg.decoder.layers:
+        raise ValueError(f'the checkpoint has {cfg.decoder.layers} decoder layers')
+    cfg = dataclasses.replace(
+        cfg, decoder=dataclasses.replace(cfg.decoder, layers=decoder_layers or cfg.decoder.layers),
+        neck=dataclasses.replace(cfg.neck, size=neck_size or cfg.neck.size,
+                                 small_objects=cfg.neck.small_objects if small_objects is None else bool(small_objects)))
+    if cfg != model.cfg:
         net = Detector(derive(cfg, len(model.names), model.num_queries), pretrained_backbone=False)
-        load_weights(net, model.net.state_dict())
+        load_weights(net, model.net.state_dict(), model.net.backbone.levels, net.backbone.levels)
     else:
         net = model.net
     net = net.cuda().eval()
@@ -83,5 +87,8 @@ if __name__ == '__main__':
     p.add_argument('--data', default='coco/coco.yaml')
     p.add_argument('--ann', default='coco/annotations/instances_val2017.json')
     p.add_argument('--decoder-layers', type=int, default=None)
+    p.add_argument('--neck-size', default=None)
+    p.add_argument('--small-objects', type=int, default=None)
+    p.add_argument('--batch', type=int, default=32)
     row = evaluate(**{k: v for k, v in vars(p.parse_args()).items()})
     print(json.dumps(row))
