@@ -56,10 +56,14 @@ def state(work, run, reference):
               else 'training' if alive else 'stopped')
     now = datetime.now(TZ)
     eta = None
-    if status == 'training' and total and rows:
-        recent = [float(r['seconds']) for r in rows[-5:]]
-        per_epoch = sum(recent) / len(recent)
-        current_left = (int(progress.group(8)) * 60 + 180) if progress and int(progress.group(1)) == done + 1 else per_epoch
+    in_epoch = progress and int(progress.group(1)) == done + 1
+    if status == 'training' and total and (rows or in_epoch):
+        if rows:
+            recent = [float(r['seconds']) for r in rows[-5:]]
+            per_epoch = sum(recent) / len(recent)
+        else:                      # first epoch: from its own progress line, plus ~3 min of validation
+            per_epoch = int(progress.group(8)) * 60 / max(1 - int(progress.group(3)) / 100, 0.01) + 180
+        current_left = int(progress.group(8)) * 60 + 180 if in_epoch else per_epoch
         eta = now + timedelta(seconds=current_left + per_epoch * max(0, total - done - 1))
     return {'run': run, 'reference': reference, 'rows': rows, 'ref': ref, 'total': total, 'done': done, 'status': status,
             'progress': progress.groups() if progress else None, 'eta': eta, 'now': now, 'official': official,
