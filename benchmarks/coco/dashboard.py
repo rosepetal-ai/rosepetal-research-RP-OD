@@ -84,8 +84,9 @@ def page(s):
     data = {
         'map': [{'name': 'val mAP50-95', 'slot': 1, 'points': [[int(r['epoch']), 100 * float(r['map50_95'])] for r in rows], 'label': True},
                 {'name': 'val mAP50', 'slot': 2, 'points': [[int(r['epoch']), 100 * float(r['map50'])] for r in rows], 'label': True}]
-               + ([{'name': f"{s['reference']} mAP50-95 (6-epoch pilot, same lr)", 'slot': 3,
-                    'points': [[int(r['epoch']), 100 * float(r['map50_95'])] for r in s['ref']], 'label': False}] if s['ref'] else []),
+               + ([{'name': f"reference: {s['reference']}, 6-epoch pilot of 1 Oct (mAP50-95)", 'slot': 3,
+                    'points': [[int(r['epoch']), 100 * float(r['map50_95'])] for r in s['ref']], 'label': False}]
+                  if s['ref'] and rows else []),          # only next to real data, never alone
         'loss': [{'name': 'train loss', 'slot': 1, 'points': [[int(r['epoch']), float(r['loss'])] for r in rows], 'label': True}],
         'lr': [{'name': 'learning rate (×1e-4)', 'slot': 1, 'points': [[int(r['epoch']), 1e4 * float(r['lr'])] for r in rows], 'label': True}],
         'refs': [{'label': f'{n} {v}', 'y': v} for n, v in REFERENCES],
