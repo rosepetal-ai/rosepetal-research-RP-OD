@@ -4,7 +4,7 @@ validation curves, loss, learning rate, and the official COCO numbers once they 
 Runs next to the training (same machine), rewrites the page every minute; the page reloads itself every minute too.
 Served by Jupyter at  http://localhost:8890/files/dashboard/index.html?token=<token>  (through the SSH tunnel).
 
-    python dashboard.py --run max_b2 --reference pilot_lr2x
+    python dashboard.py --run max_b2                          # --reference <run> adds another run's curve
 """
 import argparse
 import csv
@@ -254,7 +254,7 @@ chart('lr', D.lr, {{title: 'Learning rate per epoch', fmt: v => v.toFixed(2), w:
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('--run', default='max_b2')
-    p.add_argument('--reference', default='pilot_lr2x')
+    p.add_argument('--reference', default=None, help='another run whose mAP50-95 curve is drawn for comparison')
     p.add_argument('--work', default='/work')
     p.add_argument('--out', default='/work/dashboard/index.html')
     p.add_argument('--every', type=int, default=60)
