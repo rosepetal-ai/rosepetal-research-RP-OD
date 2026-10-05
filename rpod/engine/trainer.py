@@ -34,7 +34,8 @@ RECIPE = dict(lr=1e-4, backbone_lr=1e-4, weight_decay=1e-4, betas=(0.9, 0.999), 
               final_fraction=0.2, final_lr_ratio=0.05, ema_decay=0.9999, ema_tau=2000, clip_grad=0.1,
               freeze_backbone_bn_below=8, seed=0)
 PROGRESS_SECONDS = 120      # one progress line this often inside an epoch (none in epochs shorter than this)
-CSV_FIELDS = ['epoch', 'phase', 'lr', 'loss', 'vfl', 'bbox', 'giou', 'map50_95', 'map50', 'precision', 'recall', 'f1',
+CSV_FIELDS = ['epoch', 'phase', 'lr', 'loss', 'vfl', 'bbox', 'giou', 'map50_95', 'map50', 'map_small', 'map_medium',
+              'map_large', 'precision', 'recall', 'f1',
               'threshold', 'mean_iou', 'fp_per_image', 'fitness', 'best', 'seconds']
 
 
@@ -343,7 +344,10 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                 f"(vfl {means.get('vfl', 0):.3f} l1 {means.get('bbox', 0):.3f} giou {means.get('giou', 0):.3f})  {seconds:.0f}s")
             log(f"val  mAP50-95 {metrics.map50_95:.3f}  mAP50 {metrics.map50:.3f}  P {metrics.precision:.3f}  "
                 f"R {metrics.recall:.3f}  F1 {metrics.f1:.3f} @ {metrics.threshold:.3f}  IoU {metrics.mean_iou:.3f}  "
-                f"FP/img {metrics.fp_per_image:.2f}  fitness {metrics.fitness:.4f}" + ('  * best' if improved else ''))
+                f"FP/img {metrics.fp_per_image:.2f}  fitness {metrics.fitness:.4f}" + ('  * best' if improved else '')
+                + '\n     mAP50-95 by size  ' + '  '.join(f'{k} ' + (f'{v:.3f}' if v >= 0 else '-') for k, v in
+                                                     (('small', metrics.map_small), ('medium', metrics.map_medium),
+                                                      ('large', metrics.map_large))))
             log(metrics.table(names))
             if phase == 'flat' and stale >= patience and epoch + 1 < schedule.final_start:
                 schedule.final_start = epoch + 1

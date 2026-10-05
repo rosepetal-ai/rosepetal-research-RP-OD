@@ -22,7 +22,7 @@ def validate(net, dataset, names, device, batch=16, threshold=None, plots_dir=No
     loader = DataLoader(dataset, batch_size=batch, shuffle=False, num_workers=workers, collate_fn=collate)
     was_training = net.training
     net.eval()
-    preds, gts, first = [], [], []
+    preds, gts, scales, first = [], [], [], []
     for images, _, metas in loader:
         amp = torch.autocast(str(device).split(':')[0], dtype=amp_dtype) if amp_dtype else contextlib.nullcontext()
         with amp:
@@ -34,10 +34,11 @@ def validate(net, dataset, names, device, batch=16, threshold=None, plots_dir=No
             gt = dataset.ground_truth(meta['index'])
             preds.append(pred)
             gts.append(gt)
+            scales.append(meta['geom'][0])          # object sizes measured at the model input
             if plots_dir is not None and len(first) < GRID_IMAGES:
                 first.append((meta['index'], gt, pred))
     net.train(was_training)
-    metrics = evaluate(preds, gts, names, threshold)
+    metrics = evaluate(preds, gts, names, threshold, scales)
     if plots_dir is not None:
         items = [(dataset.read(dataset.records[i]).image, gb, gc, pb, ps, pc) for i, (gb, gc), (pb, ps, pc) in first]
         save_plots(metrics, names, items, plots_dir)

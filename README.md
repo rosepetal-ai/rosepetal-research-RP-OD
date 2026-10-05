@@ -79,7 +79,9 @@ m.per_class, m.confusion_matrix                   # confusion rows: true class +
 ```
 
 mAP follows the COCO definition (checked against pycocotools); precision, recall, F1, mean IoU of the hits and false
-positives per image are at the threshold with IoU ≥ 0.5.
+positives per image are at the threshold with IoU ≥ 0.5. `m.map_small`, `m.map_medium`, `m.map_large`: mAP50-95 by
+object size (small < 32×32, medium < 96×96), measured in pixels at the model input, with the COCO rules (also in
+`results.csv` and in the training log).
 
 ## Predict and export (trained model)
 

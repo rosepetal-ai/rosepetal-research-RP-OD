@@ -84,6 +84,9 @@ def page(s):
     data = {
         'map': [{'name': 'val mAP50-95', 'slot': 1, 'points': [[int(r['epoch']), 100 * float(r['map50_95'])] for r in rows], 'label': True},
                 {'name': 'val mAP50', 'slot': 2, 'points': [[int(r['epoch']), 100 * float(r['map50'])] for r in rows], 'label': True}]
+               + ([{'name': 'val mAP50-95 small objects', 'slot': 4, 'label': True,
+                    'points': [[int(r['epoch']), 100 * float(r['map_small'])] for r in rows if float(r.get('map_small') or -1) >= 0]}]
+                  if rows and 'map_small' in rows[0] else [])
                + ([{'name': f"reference: {s['reference']}, 6-epoch pilot of 1 Oct (mAP50-95)", 'slot': 3,
                     'points': [[int(r['epoch']), 100 * float(r['map50_95'])] for r in s['ref']], 'label': False}]
                   if s['ref'] and rows else []),          # only next to real data, never alone
@@ -122,13 +125,13 @@ TEMPLATE = """<!doctype html>
 <style>
 .viz-root {{ color-scheme: light; --surface-1:#fcfcfb; --page:#f9f9f7; --text-primary:#0b0b0b; --text-secondary:#52514e;
   --muted:#898781; --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,0.10); --track:#cde2fb;
-  --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a; --good:#0ca30c; --critical:#d03b3b; }}
+  --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a; --series-4:#eda100; --good:#0ca30c; --critical:#d03b3b; }}
 @media (prefers-color-scheme: dark) {{ :root:where(:not([data-theme="light"])) .viz-root {{ color-scheme: dark;
   --surface-1:#1a1a19; --page:#0d0d0d; --text-primary:#ffffff; --text-secondary:#c3c2b7; --grid:#2c2c2a; --axis:#383835;
-  --border:rgba(255,255,255,0.10); --track:#184f95; --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; }} }}
+  --border:rgba(255,255,255,0.10); --track:#184f95; --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#c98500; }} }}
 :root[data-theme="dark"] .viz-root {{ color-scheme: dark; --surface-1:#1a1a19; --page:#0d0d0d; --text-primary:#ffffff;
   --text-secondary:#c3c2b7; --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,0.10); --track:#184f95;
-  --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; }}
+  --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#c98500; }}
 body {{ margin:0; }}
 .viz-root {{ background:var(--page); color:var(--text-primary); font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
   min-height:100vh; padding:20px 16px 40px; box-sizing:border-box; }}

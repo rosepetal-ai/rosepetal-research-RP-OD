@@ -4,6 +4,8 @@ regions ignored, up to 100 detections per image, AP by object size).
 --decoder-layers N evaluates the same weights keeping only the first N decoder layers, without retraining: every layer
 was trained with its own loss, so each one is already a complete detector. --neck-size and --small-objects load the
 weights into a smaller neck or without P2 (approximate without fine-tuning: shows how much a reduction loses).
+--imgsz evaluates at another input size (the network has no size-specific weights) and --queries keeps another number
+of candidates for the decoder; both without retraining. APs50 / APs75: small objects at IoU 0.5 and 0.75.
 
     python eval_coco.py runs/train/max_b2/weights/best.pt
     python eval_coco.py runs/train/max_b2/weights/best.pt --decoder-layers 3
@@ -35,8 +37,9 @@ STATS = ['AP', 'AP50', 'AP75', 'APs', 'APm', 'APl', 'AR1', 'AR10', 'AR100', 'ARs
 
 @torch.no_grad()
 def evaluate(ckpt, data='coco/coco.yaml', ann='coco/annotations/instances_val2017.json', decoder_layers=None,
-             neck_size=None, small_objects=None, batch=32, workers=8):
+             neck_size=None, small_objects=None, imgsz=None, queries=None, batch=32, workers=8):
     model = RPOD(ckpt)
+    imgsz = [imgsz, imgsz] if isinstance(imgsz, int) else list(imgsz or model.imgsz)
     cfg = model.cfg
     if decoder_layers and decoder_layers > cfg.decoder.layers:
         raise ValueError(f'the checkpoint has {cfg.decoder.layers} decoder layers')
@@ -50,17 +53,19 @@ def evaluate(ckpt, data='coco/coco.yaml', ann='coco/annotations/instances_val201
     else:
         net = model.net
     net = net.cuda().eval()
+    if queries:
+        net.decoder.num_queries = queries
     root = Path(data).resolve().parent
     cat_ids = json.loads((root / 'classes.json').read_text())['category_ids']
     ds = check_dataset(data)
-    dataset = DetectionDataset(ds['records']['val'], model.imgsz, len(model.names))
+    dataset = DetectionDataset(ds['records']['val'], imgsz, len(model.names))
     results, image_ids = [], []
     for images, _, metas in DataLoader(dataset, batch_size=batch, num_workers=workers, collate_fn=collate):
         with torch.autocast('cuda', dtype=torch.bfloat16):
             out = net(images.cuda(non_blocking=True))
         for j, meta in enumerate(metas):
             xyxy, scores, cls = postprocess(out['pred_logits'][j].float(), out['pred_boxes'][j].float(), meta['geom'],
-                                            meta['orig_shape'], model.imgsz, 0.0, 100)
+                                            meta['orig_shape'], imgsz, 0.0, 100)
             image_id = int(Path(meta['path']).stem)
             image_ids.append(image_id)
             for (x0, y0, x1, y1), s, c in zip(xyxy.tolist(), scores.tolist(), cls.tolist()):
@@ -74,10 +79,15 @@ def evaluate(ckpt, data='coco/coco.yaml', ann='coco/annotations/instances_val201
         ev.accumulate()
         ev.summarize()
     stats = dict(zip(STATS, (round(100 * s, 1) for s in ev.stats)))
+    prec = ev.eval['precision'][:, :, :, 1, 2]                   # [IoU, recall, class] for small objects, 100 detections
+    for name, t in (('APs50', 0), ('APs75', 5)):
+        p = prec[t]
+        stats[name] = round(100 * float(p[p > -1].mean()), 1)
     params = sum(p.numel() for p in net.parameters()) / 1e6
     c = cfg
     row = {'model': f'{c.backbone} · neck {c.neck.size}{" · P2" if c.neck.small_objects else ""} · {c.decoder.layers} layers',
-           'params_M': round(params, 1), **stats, 'checkpoint': str(ckpt)}
+           'params_M': round(params, 1), 'imgsz': imgsz, 'queries': net.decoder.num_queries, **stats,
+           'checkpoint': str(ckpt)}
     return row
 
 
@@ -89,6 +99,8 @@ if __name__ == '__main__':
     p.add_argument('--decoder-layers', type=int, default=None)
     p.add_argument('--neck-size', default=None)
     p.add_argument('--small-objects', type=int, default=None)
+    p.add_argument('--imgsz', type=int, default=None)
+    p.add_argument('--queries', type=int, default=None)
     p.add_argument('--batch', type=int, default=32)
     row = evaluate(**{k: v for k, v in vars(p.parse_args()).items()})
     print(json.dumps(row))

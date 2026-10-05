@@ -51,6 +51,24 @@ def test_map_matches_pycocotools(seed):
         e.summarize()
     ours = evaluate(preds, gts, {0: '0', 1: '1', 2: '2'})
     assert abs(ours.map50_95 - e.stats[0]) < 1e-9 and abs(ours.map50 - e.stats[1]) < 1e-9
+    for mine, theirs in ((ours.map_small, e.stats[3]), (ours.map_medium, e.stats[4]), (ours.map_large, e.stats[5])):
+        assert abs(mine - theirs) < 1e-9                            # COCO small / medium / large, same rules
+
+
+def test_sizes_are_measured_at_the_model_input():
+    preds, gts = random_case(3)
+    at_input = evaluate(preds, gts, {0: '0', 1: '1', 2: '2'}, scales=[0.5] * len(gts))
+    scaled = evaluate([(pb * 0.5, ps, pc) for pb, ps, pc in preds], [(gb * 0.5, gc) for gb, gc in gts],
+                      {0: '0', 1: '1', 2: '2'})
+    assert (at_input.map_small, at_input.map_medium, at_input.map_large) == (scaled.map_small, scaled.map_medium,
+                                                                            scaled.map_large)
+    assert at_input.size_objects == scaled.size_objects and at_input.map50_95 == scaled.map50_95
+
+
+def test_no_objects_of_a_size():
+    gb = np.array([[0, 0, 200, 200]], float)                         # only a large object
+    m = evaluate([(gb, np.array([0.9]), np.array([0]))], [(gb, np.array([0]))], {0: 'a'})
+    assert m.map_large == 1 and m.map_small == m.map_medium == -1 and m.size_objects == {'small': 0, 'medium': 0, 'large': 1}
 
 
 def test_perfect_predictions():
