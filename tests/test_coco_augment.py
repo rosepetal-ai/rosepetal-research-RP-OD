@@ -46,5 +46,7 @@ def test_photometric_changes_colors_not_geometry():
 
 def test_last_epochs_are_clean():
     s = scene()
-    out = A.augment(s, SimpleNamespace(epoch=95, epochs=100, rng=np.random.default_rng(0)))
-    assert out is s
+    for epoch, epochs in ((96, 100), (99, 100), (69, 72), (5, 6)):           # last 4 %, at least one epoch
+        assert A.augment(s, SimpleNamespace(epoch=epoch, epochs=epochs, rng=np.random.default_rng(0))) is s
+    changed = [A.augment(s, SimpleNamespace(epoch=95, epochs=100, rng=np.random.default_rng(k))) is not s for k in range(10)]
+    assert any(changed)                                                        # epoch 95 of 100 still augments

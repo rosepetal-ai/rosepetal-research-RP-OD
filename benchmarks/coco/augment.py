@@ -1,7 +1,9 @@
 """COCO training augmentations for the RP-OD augment hook (the library itself has none).
 
 The RT-DETR / D-FINE recipe: photometric distortion, zoom-out, IoU crop and horizontal flip, switched off for the last
-10 % of the epochs so training ends on clean images. It runs on the original image, before RP-OD's letterbox, so
+4 % of the epochs (at least one; the same ones where multi-scale training returns to the fixed size) so training ends
+on clean images. A longer clean phase (10 %, 7 of 72 epochs) made the first COCO run overfit: training loss fell
+from 14.5 to 12.0 while validation dropped from 50.6 to 49.8. It runs on the original image, before RP-OD's letterbox, so
 changing the image content is what gives scale variety with a fixed input: zooming out makes the objects smaller on the
 canvas, cropping makes them bigger.
 
@@ -18,11 +20,11 @@ ZOOM_OUT_MAX = 4.0                                   # canvas up to 4x the image
 FILL = 114                                           # same gray as the letterbox padding
 CROP_SCALE, CROP_ASPECT, CROP_TRIALS = (0.3, 1.0), (0.5, 2.0), 40
 CROP_MIN_IOUS = (0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0)  # SSD sampler; 1.0 means "no crop this time"
-NO_AUG_FRACTION = 0.1                                # D-FINE: the last 8 of 80 epochs
+NO_AUG_FRACTION = 0.04                               # = the trainer's clean_fraction
 
 
 def augment(sample, ctx):
-    if ctx.epoch >= ctx.epochs * (1 - NO_AUG_FRACTION):
+    if ctx.epoch >= ctx.epochs - max(1, round(NO_AUG_FRACTION * ctx.epochs)):
         return sample
     rng = ctx.rng
     if rng.random() < P_PHOTOMETRIC:

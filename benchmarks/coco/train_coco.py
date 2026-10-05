@@ -2,8 +2,10 @@
 runs/train/<name>/ (results.csv after every epoch, weights/best.pt and last.pt) under the current directory.
 
 Protocol: 640x640, 300 queries (the library would take 5x the busiest image, 465 on COCO), augment.py (RT-DETR recipe,
-off for the last 10 % of the epochs), the full schedule (patience never brings the final decay forward), batch 32
-(split into accumulation steps automatically if it does not fit). Everything else is the library recipe.
+off for the last 4 % of the epochs), the full schedule (patience never brings the final decay forward), the learning
+rate decaying over the second half (--final-fraction 0.5: flat for 80 % of a 72-epoch run left the model on a plateau
+from epoch ~40 with nothing gained in the decay), batch 32 (split into accumulation steps automatically if it does not
+fit). Everything else is the library recipe.
 
     python train_coco.py --name max_b2 --epochs 72                       # the maximum model: b2, neck l, P2, 6 layers
     python train_coco.py --name b2_m3 --neck-size m --small-objects 0 --decoder-layers 3 --epochs 12 \
@@ -32,6 +34,7 @@ p.add_argument('--epochs', type=int, default=72)
 p.add_argument('--batch', type=int, default=32)
 p.add_argument('--lr', type=float, default=None, help='default: the library recipe')
 p.add_argument('--backbone-lr', type=float, default=None, help='default: the library recipe')
+p.add_argument('--final-fraction', type=float, default=0.5, help='share of the epochs with the learning rate decaying')
 p.add_argument('--backbone', default='hgnetv2-b2')
 p.add_argument('--neck-size', default='l')
 p.add_argument('--small-objects', type=int, default=1)
@@ -50,6 +53,7 @@ if a.resume:      # same configuration, recipe, data, epochs and batch as the in
     a.small_objects, a.decoder_layers = int(cfg['neck']['small_objects']), cfg['decoder']['layers']
     a.lr, a.backbone_lr, a.init = run_args['recipe']['lr'], run_args['recipe']['backbone_lr'], None
     a.multiscale = int(run_args.get('multiscale', False))
+    a.final_fraction = run_args['recipe']['final_fraction']
 elif not a.name:
     p.error('--name is required (unless --resume)')
 
@@ -58,6 +62,7 @@ if a.lr is not None:
     trainer.RECIPE['lr'] = a.lr
 if a.backbone_lr is not None:
     trainer.RECIPE['backbone_lr'] = a.backbone_lr
+trainer.RECIPE['final_fraction'] = a.final_fraction
 model = RPOD(backbone=a.backbone, neck_size=a.neck_size, small_objects=bool(a.small_objects),
              decoder_layers=a.decoder_layers)
 if a.init:
