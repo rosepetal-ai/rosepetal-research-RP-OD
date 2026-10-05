@@ -48,7 +48,8 @@ def evaluate(ckpt, data='coco/coco.yaml', ann='coco/annotations/instances_val201
         neck=dataclasses.replace(cfg.neck, size=neck_size or cfg.neck.size,
                                  small_objects=cfg.neck.small_objects if small_objects is None else bool(small_objects)))
     if cfg != model.cfg:
-        net = Detector(derive(cfg, len(model.names), model.num_queries), pretrained_backbone=False)
+        net = Detector(derive(cfg, len(model.names), model.num_queries, model.fine_query_fraction),
+                       pretrained_backbone=False)
         load_weights(net, model.net.state_dict(), model.net.backbone.levels, net.backbone.levels)
     else:
         net = model.net

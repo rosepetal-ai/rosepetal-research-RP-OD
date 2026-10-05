@@ -42,3 +42,13 @@ def test_fuse_keeps_outputs():
         fused = net.fuse()(x)
     assert torch.allclose(ref['pred_boxes'], fused['pred_boxes'], atol=1e-4)
     assert torch.allclose(ref['pred_logits'], fused['pred_logits'], atol=1e-3)
+
+
+def test_fine_level_quota_in_query_selection():
+    from rpod.nn.decoder import Decoder
+    dec = Decoder(3, num_queries=10, n_levels=2, num_layers=1, fine_query_fraction=0.3)
+    scores = torch.cat([torch.zeros(1, 16), torch.ones(1, 4)], 1)        # finest level (4x4) scores lower
+    picked = dec._select(scores, [(4, 4), (2, 2)])[0].tolist()
+    assert len(picked) == len(set(picked)) == 10 and sum(i < 16 for i in picked) >= 3
+    dec.fine_query_fraction = 0.0
+    assert set(dec._select(scores, [(4, 4), (2, 2)])[0].tolist()) >= {16, 17, 18, 19}

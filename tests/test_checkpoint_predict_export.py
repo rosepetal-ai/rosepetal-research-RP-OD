@@ -107,3 +107,11 @@ def test_decoder_truncation_is_exact():
         out_full = full(x)
     assert torch.equal(out_short['pred_logits'], out_full['pred_logits'])
     assert torch.equal(out_short['pred_boxes'], out_full['pred_boxes'])
+
+
+
+def test_export_with_fine_query_quota(tmp_path):
+    from rpod.engine.exporter import export_onnx
+    net = make_net(backbone='hgnetv2-b0')
+    net.decoder.fine_query_fraction = 0.3
+    export_onnx(net, 'hgnetv2-b0', NAMES, [256, 320], 0.5, tmp_path)      # raises if onnxruntime disagrees with torch

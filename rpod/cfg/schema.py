@@ -183,8 +183,10 @@ def validate(cfg):
 
 
 # ------------------------------------------------------------------------------------------------ derived
-def derive(cfg, num_classes, num_queries=MIN_QUERIES):
-    """Everything the network needs, computed from the user knobs. Nothing here is user-facing."""
+def derive(cfg, num_classes, num_queries=MIN_QUERIES, fine_query_fraction=0.0):
+    """Everything the network needs, computed from the user knobs. Nothing here is user-facing.
+
+    fine_query_fraction: share of the decoder's candidates reserved for the finest level (set by focus_small)."""
     levels = [2, 3, 4, 5] if cfg.neck.small_objects else [3, 4, 5]
     return dict(
         timm_name=BACKBONES[cfg.backbone]['timm'], levels=levels, hidden_dim=HIDDEN_DIM,
@@ -193,7 +195,8 @@ def derive(cfg, num_classes, num_queries=MIN_QUERIES):
         num_classes=num_classes, num_queries=max(MIN_QUERIES, num_queries),
         dec_layers=cfg.decoder.layers, dec_heads=DECODER['heads'], dec_points=DECODER['points'],
         dec_ffn=DECODER['ffn_dim'], anchor_size=0.05 * 2.0 ** (levels[0] - 3),
-        num_denoising=DENOISING['num'], label_noise=DENOISING['label_noise'], box_noise=DENOISING['box_noise'])
+        num_denoising=DENOISING['num'], label_noise=DENOISING['label_noise'], box_noise=DENOISING['box_noise'],
+        fine_queries=float(fine_query_fraction))
 
 
 def queries_for(max_objects_per_image):

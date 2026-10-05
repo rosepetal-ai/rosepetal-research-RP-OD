@@ -78,7 +78,7 @@ def diagnose(ckpt, data='coco/coco.yaml', queries=None, batch=16, workers=8, lim
         shapes = captured['shapes']
         anchors, _ = dec._anchors(shapes, captured['delta'].device, torch.float32)
         boxes_all = (captured['delta'] + anchors).sigmoid()                         # [B, S, 4] cxcywh, canvas 0-1
-        top = captured['logits'].max(-1).values.topk(dec.num_queries, dim=1).indices  # [B, K]
+        top = dec._select(captured['logits'].max(-1).values, shapes)                  # [B, K], as the model does
         level_of = np.concatenate([np.full(h * w, l) for l, (h, w) in zip(range(len(levels)), shapes)])
         np.add.at(sel_levels, level_of[top.cpu().numpy().ravel()], 1)
         H, W = imgsz

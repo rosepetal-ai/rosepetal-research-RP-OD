@@ -17,7 +17,8 @@ from .predictor import postprocess
 
 
 @torch.no_grad()
-def validate(net, dataset, names, device, batch=16, threshold=None, plots_dir=None, workers=0, amp_dtype=None):
+def validate(net, dataset, names, device, batch=16, threshold=None, plots_dir=None, workers=0, amp_dtype=None,
+             focus_small=False):
     """threshold None: choose the best-F1 threshold (training validation). A number: use it (test, re-validation)."""
     loader = DataLoader(dataset, batch_size=batch, shuffle=False, num_workers=workers, collate_fn=collate)
     was_training = net.training
@@ -38,7 +39,7 @@ def validate(net, dataset, names, device, batch=16, threshold=None, plots_dir=No
             if plots_dir is not None and len(first) < GRID_IMAGES:
                 first.append((meta['index'], gt, pred))
     net.train(was_training)
-    metrics = evaluate(preds, gts, names, threshold, scales)
+    metrics = evaluate(preds, gts, names, threshold, scales, focus_small)
     if plots_dir is not None:
         items = [(dataset.read(dataset.records[i]).image, gb, gc, pb, ps, pc) for i, (gb, gc), (pb, ps, pc) in first]
         save_plots(metrics, names, items, plots_dir)

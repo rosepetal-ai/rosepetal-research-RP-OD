@@ -102,3 +102,23 @@ def test_nothing_detected():
     m = evaluate([(np.zeros((0, 4)), np.zeros(0), np.zeros(0, int))], [(np.array([[0, 0, 5, 5.]]), np.array([0]))], NAMES)
     assert m.threshold == DEFAULT_THRESHOLD and m.map50_95 == 0 and m.recall == 0
     assert '-' in m.table(NAMES).splitlines()[-1]   # class b has no objects: shown as '-'
+
+
+
+def test_focus_small_threshold_recall_and_fitness():
+    """A small object found at a low score: the usual threshold drops it, focus_small keeps it."""
+    gb = np.array([[0, 0, 100, 100], [200, 200, 210, 210]], float)                 # large, small (10x10)
+    pb = np.array([[0, 0, 100, 100], [300, 300, 340, 340], [400, 0, 440, 40], [200, 200, 210, 210]], float)
+    ps = np.array([0.9, 0.6, 0.5, 0.4])                                           # hit, false alarm, false alarm, small hit
+    case = ([(pb, ps, np.zeros(4, int))], [(gb, np.zeros(2, int))], {0: 'a'})
+    usual, small = evaluate(*case), evaluate(*case, focus_small=True)
+    assert usual.threshold >= 0.6 and usual.recall_small == 0                    # F1 0.67 either way: highest wins
+    assert small.threshold < 0.4 and small.recall_small == 1                     # small x2: F1 0.75 keeping all
+    assert abs(small.fitness - (0.25 * small.map50_95 + 0.25 * small.map_small + 0.5 * small.recall_small)) < 1e-12
+    assert abs(usual.fitness - (0.5 * usual.map50_95 + 0.5 * usual.recall)) < 1e-12
+
+
+def test_focus_small_without_small_objects_is_the_usual_fitness():
+    gb = np.array([[0, 0, 100, 100]], float)
+    m = evaluate([(gb, np.array([0.9]), np.array([0]))], [(gb, np.array([0]))], {0: 'a'}, focus_small=True)
+    assert m.recall_small == -1 and m.fitness == 0.5 * m.map50_95 + 0.5 * m.recall

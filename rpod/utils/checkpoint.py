@@ -39,7 +39,8 @@ def load_checkpoint(path):
 
 def build_from_checkpoint(ckpt):
     from ..nn import Detector
-    net = Detector(derive(ckpt['config'], len(ckpt['names']), ckpt['num_queries']), pretrained_backbone=False)
+    net = Detector(derive(ckpt['config'], len(ckpt['names']), ckpt['num_queries'], ckpt.get('fine_query_fraction', 0.0)),
+                   pretrained_backbone=False)
     net.load_state_dict(ckpt['state_dict'])
     return net
 

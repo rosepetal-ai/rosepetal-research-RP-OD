@@ -14,7 +14,7 @@ class Detector(nn.Module):
                          d['attn_heads'], d['attn_ffn'], d['fusion_blocks'], d['fusion_expansion'])
         self.decoder = Decoder(d['num_classes'], d['hidden_dim'], d['num_queries'], d['dec_heads'], len(d['levels']),
                                d['dec_points'], d['dec_layers'], d['dec_ffn'], 0.0, d['num_denoising'],
-                               d['label_noise'], d['box_noise'], d['anchor_size'])
+                               d['label_noise'], d['box_noise'], d['anchor_size'], d.get('fine_queries', 0.0))
 
     def forward(self, images, targets=None):
         """images: [B, 3, H, W] in [0, 1]. Eval: {'pred_logits': [B, K, C], 'pred_boxes': [B, K, 4] cxcywh 0-1}."""

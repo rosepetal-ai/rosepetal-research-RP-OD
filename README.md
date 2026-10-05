@@ -56,6 +56,19 @@ Why these values: on a real dataset (77 training images), a backbone learning ra
 1e-5 gave +0.12 mAP50-95 on validation, and batch 4 instead of 8 another +0.06 (confirmed with three seeds).
 Removing the flat phase, gradient clipping 10, weight decay 1e-3 and 300 epochs did not help.
 
+Two optional training modes, off by default:
+
+```python
+model.train('parts.yaml', imgsz=640, multiscale=True)    # every batch at a random size from 0.75x to 1.25x imgsz
+model.train('parts.yaml', imgsz=640, focus_small=True)   # priority for small objects (< 32x32 at the model input)
+```
+
+`multiscale`: each image is letterboxed from the original at the batch's size; the last epochs and validation stay at
+`imgsz`. `focus_small`: small objects weigh up to 3x in the loss (also in the query selection), 30 % of the decoder's
+candidates are reserved for the finest level (kept in the model and in the export), and the best epoch and the
+recommended threshold are chosen for small objects (fitness 0.25 mAP50-95 + 0.25 mAP small + 0.5 recall of small
+objects; threshold by F1 with small objects counted twice).
+
 The input needs at least as many candidate positions as the decoder keeps (300): 128×128 or larger.
 
 `runs/train/<name>/` (the name gets a number if it exists):
