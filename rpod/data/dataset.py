@@ -11,12 +11,13 @@ No augmentation happens here. An external library can plug in through one functi
         # ctx.epoch, ctx.epochs, ctx.imgsz ([height, width] the image will be letterboxed into), ctx.rng
         return sample   # any size: the letterbox comes after
 """
+import math
 import multiprocessing as mp
 from dataclasses import dataclass
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset, get_worker_info
+from torch.utils.data import Dataset, Sampler, get_worker_info
 
 from .check import DatasetError
 from .letterbox import letterbox
@@ -92,17 +93,19 @@ class DetectionDataset(Dataset):
         labels = record['cls'] if self.id_map is None else self.id_map[record['cls']]
         return Sample(image, xyxy.reshape(-1, 4) * np.array([w, h, w, h], np.float32), labels.copy(), record['path'])
 
-    def __getitem__(self, i):
+    def __getitem__(self, item):
+        i, size = item if isinstance(item, tuple) else (item, self.imgsz)   # (index, [h, w]) from multi-scale batches
+        size = list(size)
         record = self.records[i]
         sample = self.read(record)
         if self.augment is not None:
             epoch = self._epoch.value
             worker = get_worker_info()
             rng = np.random.default_rng([self.seed, epoch, worker.id if worker else 0, i])
-            sample = self._checked(self.augment(sample, AugmentContext(self, epoch, self.epochs, self.imgsz, rng)), record)
-        image, geom = letterbox(sample.image, *self.imgsz)
+            sample = self._checked(self.augment(sample, AugmentContext(self, epoch, self.epochs, size, rng)), record)
+        image, geom = letterbox(sample.image, *size)
         scale, _, _, top, left = geom
-        out_h, out_w = self.imgsz
+        out_h, out_w = size
         b = sample.boxes * scale + np.array([left, top, left, top], np.float32)
         b = b / np.array([out_w, out_h, out_w, out_h], np.float32)
         cxcywh = np.stack([(b[:, 0] + b[:, 2]) / 2, (b[:, 1] + b[:, 3]) / 2, b[:, 2] - b[:, 0], b[:, 3] - b[:, 1]], 1)
@@ -136,3 +139,36 @@ class DetectionDataset(Dataset):
 def collate(batch):
     images, targets, metas = zip(*batch)
     return torch.stack(images), list(targets), list(metas)
+
+
+def multiscale_sizes(imgsz, low=0.75, high=1.25, stride=32):
+    """Input sizes for multi-scale training: imgsz scaled from `low` to `high`, both sides multiples of `stride`,
+    aspect ratio kept (to the nearest stride). Sorted by area; imgsz itself is always one of them."""
+    h, w = imgsz
+    sizes = {(h, w)}
+    for k in range(-math.floor(h * (1 - low) / stride), math.floor(h * (high - 1) / stride) + 1):
+        f = (h + k * stride) / h
+        sizes.add((h + k * stride, max(stride, round(w * f / stride) * stride)))
+    return [list(x) for x in sorted(sizes, key=lambda x: x[0] * x[1])]
+
+
+class MultiScaleBatchSampler(Sampler):
+    """Shuffled batches of (index, size) where all the images of a batch share one random size from `sizes`.
+
+    Each image is then letterboxed directly from the original at that size (as in production, never upscaled from
+    a smaller letterbox). The trainer sets `epoch` (it seeds the order and the sizes, so a resumed run gets the same
+    batches) and `fixed` (True: every batch at `base`, for the last epochs)."""
+
+    def __init__(self, n, batch, sizes, base, seed=0, drop_last=True):
+        self.n, self.batch, self.sizes, self.base = n, batch, [tuple(x) for x in sizes], tuple(base)
+        self.seed, self.drop_last, self.epoch, self.fixed = seed, drop_last, 0, False
+
+    def __len__(self):
+        return self.n // self.batch if self.drop_last else math.ceil(self.n / self.batch)
+
+    def __iter__(self):
+        rng = np.random.default_rng([self.seed, self.epoch])
+        order = rng.permutation(self.n)
+        for k in range(len(self)):
+            size = self.base if self.fixed else self.sizes[rng.integers(len(self.sizes))]
+            yield [(int(i), size) for i in order[k * self.batch:(k + 1) * self.batch]]

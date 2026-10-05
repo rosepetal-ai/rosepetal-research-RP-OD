@@ -85,7 +85,8 @@ class RPOD:
         return summary
 
     # -------------------------------------------------------------------------------------------- train / validate
-    def train(self, data, imgsz=640, epochs=150, patience=20, batch=4, device=None, augment=None, name='exp'):
+    def train(self, data, imgsz=640, epochs=150, patience=20, batch=4, device=None, augment=None, name='exp',
+              multiscale=False):
         """Train on a YOLO dataset (data.yaml). Afterwards this object is the best model (runs/train/<name>/weights/best.pt).
 
         imgsz: int or [height, width], rounded up to multiples of 32; it is the size used in production too.
@@ -93,10 +94,12 @@ class RPOD:
         batch: effective batch; if it does not fit in the GPU it is split into accumulation steps (shown in the log).
             4 by default: more optimizer steps per epoch trained clearly better on small datasets.
         augment: optional function(sample, ctx) -> sample from your augmentation library (training images only).
+        multiscale: train every batch at a random size from 0.75x to 1.25x imgsz (the last epochs at imgsz), so the
+            model learns objects at more scales; validation and production stay at imgsz.
         Returns {'dir', 'best_epoch', 'val', 'test'} with the final metrics.
         """
         return _train(self, data, _size(imgsz), int(epochs), int(patience), int(batch), device or _default_device(),
-                      augment, name)
+                      augment, name, multiscale=multiscale)
 
     def val(self, data=None, split='val', device=None, batch=16, name='exp'):
         """Metrics and plots (runs/val/<name>) on a split of the training dataset or of another dataset with the same

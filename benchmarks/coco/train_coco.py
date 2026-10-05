@@ -36,6 +36,7 @@ p.add_argument('--backbone', default='hgnetv2-b2')
 p.add_argument('--neck-size', default='l')
 p.add_argument('--small-objects', type=int, default=1)
 p.add_argument('--decoder-layers', type=int, default=6)
+p.add_argument('--multiscale', type=int, default=0, help='1: train at random sizes from 480 to 800 (last epochs at 640)')
 p.add_argument('--init', default=None, help='checkpoint to start from, any configuration (loads what fits)')
 p.add_argument('--resume', default=None, help='weights/state.pt of an interrupted run: everything else comes from it')
 a = p.parse_args()
@@ -48,6 +49,7 @@ if a.resume:      # same configuration, recipe, data, epochs and batch as the in
     a.backbone, a.neck_size = cfg['backbone'], cfg['neck']['size']
     a.small_objects, a.decoder_layers = int(cfg['neck']['small_objects']), cfg['decoder']['layers']
     a.lr, a.backbone_lr, a.init = run_args['recipe']['lr'], run_args['recipe']['backbone_lr'], None
+    a.multiscale = int(run_args.get('multiscale', False))
 elif not a.name:
     p.error('--name is required (unless --resume)')
 
@@ -61,4 +63,4 @@ model = RPOD(backbone=a.backbone, neck_size=a.neck_size, small_objects=bool(a.sm
 if a.init:
     model.net = RPOD(a.init).net      # the trainer loads what fits (fewer levels, blocks or layers) and logs a report
 trainer.train(model, a.data, [640, 640], a.epochs, a.epochs, a.batch, 'cuda', augment, a.name, save_state=True,
-              resume=a.resume)
+              resume=a.resume, multiscale=bool(a.multiscale))

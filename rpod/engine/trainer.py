@@ -23,7 +23,7 @@ import yaml
 from torch.utils.data import DataLoader
 
 from ..cfg.schema import check_input_size, derive, queries_for, to_dict
-from ..data import DetectionDataset, check_dataset, collate
+from ..data import DetectionDataset, MultiScaleBatchSampler, check_dataset, collate, multiscale_sizes
 from ..data.check import format_problems
 from ..loss import HungarianMatcher, SetCriterion
 from ..nn import Detector
@@ -32,7 +32,7 @@ from .validator import validate
 
 RECIPE = dict(lr=1e-4, backbone_lr=1e-4, weight_decay=1e-4, betas=(0.9, 0.999), warmup_steps=2000, warmup_max_fraction=0.05,
               final_fraction=0.2, final_lr_ratio=0.05, ema_decay=0.9999, ema_tau=2000, clip_grad=0.1,
-              freeze_backbone_bn_below=8, seed=0)
+              freeze_backbone_bn_below=8, clean_fraction=0.04, seed=0)
 PROGRESS_SECONDS = 120      # one progress line this often inside an epoch (none in epochs shorter than this)
 CSV_FIELDS = ['epoch', 'phase', 'lr', 'loss', 'vfl', 'bbox', 'giou', 'map50_95', 'map50', 'map_small', 'map_medium',
               'map_large', 'precision', 'recall', 'f1',
@@ -186,8 +186,11 @@ def _run_dir(project, name):
 
 
 def train(model, data, imgsz, epochs, patience, batch, device, augment, name, project='runs/train', workers=None,
-          save_state=False, resume=None):
+          save_state=False, resume=None, multiscale=False):
     """Trains `model` (an RPOD) in place and returns {'dir', 'best_epoch', 'val', 'test'}.
+
+    multiscale: every batch at a random size from 0.75x to 1.25x imgsz (letterboxed from the original images), and the
+    last clean_fraction of the epochs (at least one) at imgsz; validation is always at imgsz.
 
     save_state: also write weights/state.pt after every epoch (optimizer, EMA, schedule, best so far), so a long run
     that gets interrupted can continue with resume=<that file> and the same arguments. Not part of RPOD.train.
@@ -214,7 +217,8 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     # ---- model
     num_queries = queries_for(stats['max_objects_per_image'])
     d = derive(model.cfg, len(names), num_queries)
-    check_input_size(d['levels'], imgsz, num_queries)
+    sizes = multiscale_sizes(imgsz) if multiscale else [list(imgsz)]
+    check_input_size(d['levels'], sizes[0], num_queries)
     net = Detector(d, pretrained_backbone=state is None)
     if state:
         net.load_state_dict(state['net'])
@@ -227,8 +231,8 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     matcher = HungarianMatcher()
     criterion = SetCriterion(len(names), matcher)
 
-    micro = state['micro'] if state else _micro_batch(net, criterion, batch, imgsz, device, amp_dtype,
-                                                      stats['max_objects_per_image'])
+    micro = state['micro'] if state else _micro_batch(net, criterion, batch, sizes[-1], device, amp_dtype,
+                                                      stats['max_objects_per_image'])   # at the largest size
     accumulate = batch // micro
     freeze_bn = micro < r['freeze_backbone_bn_below']
     if freeze_bn:
@@ -236,13 +240,23 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     log(f'batch {batch} = {micro} images x {accumulate} accumulation step(s)'
         + (f' · backbone BatchNorm frozen ({micro} images per step < {r["freeze_backbone_bn_below"]})' if freeze_bn else '')
         + f" · precision {str(amp_dtype).replace('torch.', '') if amp_dtype else 'float32'} · device {device}")
+    clean_epochs = max(1, round(r['clean_fraction'] * epochs))
+    if multiscale:
+        log(f'multi-scale: {len(sizes)} sizes from {sizes[0][0]}x{sizes[0][1]} to {sizes[-1][0]}x{sizes[-1][1]}, '
+            f'the last {clean_epochs} epoch(s) at {imgsz[0]}x{imgsz[1]}')
 
     train_set = DetectionDataset(ds['records']['train'], imgsz, len(names), augment, epochs=epochs, seed=r['seed'])
     val_set = DetectionDataset(ds['records']['val'], imgsz, len(names))
-    loader = DataLoader(train_set, batch_size=micro, shuffle=True, num_workers=workers, collate_fn=collate,
-                        drop_last=len(train_set) >= micro, pin_memory=device.type == 'cuda',
-                        persistent_workers=workers > 0,
-                        generator=torch.Generator().manual_seed(r['seed'] + (state['epoch'] if state else 0)))
+    sampler = MultiScaleBatchSampler(len(train_set), micro, sizes, imgsz, r['seed'], len(train_set) >= micro) \
+        if multiscale else None
+    if sampler:
+        loader = DataLoader(train_set, batch_sampler=sampler, num_workers=workers, collate_fn=collate,
+                            pin_memory=device.type == 'cuda', persistent_workers=workers > 0)
+    else:
+        loader = DataLoader(train_set, batch_size=micro, shuffle=True, num_workers=workers, collate_fn=collate,
+                            drop_last=len(train_set) >= micro, pin_memory=device.type == 'cuda',
+                            persistent_workers=workers > 0,
+                            generator=torch.Generator().manual_seed(r['seed'] + (state['epoch'] if state else 0)))
     steps_per_epoch = max(1, math.ceil(len(loader) / accumulate))
     optimizer = torch.optim.AdamW(_param_groups(net, r), betas=r['betas'])
     scaler = torch.amp.GradScaler('cuda', enabled=amp_dtype == torch.float16)
@@ -266,7 +280,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     args = {'data': str(Path(data).resolve()), 'imgsz': list(imgsz), 'epochs': epochs, 'patience': patience, 'batch': batch,
             'device': str(device), 'augment': getattr(augment, '__name__', None) if augment else None, 'name': run.name,
             'model': to_dict(model.cfg), 'classes': names, 'num_queries': num_queries, 'micro_batch': micro,
-            'accumulate': accumulate, 'backbone_bn_frozen': freeze_bn, 'recipe': {k: list(v) if isinstance(v, tuple) else v
+            'accumulate': accumulate, 'backbone_bn_frozen': freeze_bn, 'multiscale': bool(multiscale), 'recipe': {k: list(v) if isinstance(v, tuple) else v
                                                                                    for k, v in r.items()}}
     if state:
         args['name'] = state['args']['name']
@@ -284,6 +298,8 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
         while epoch < schedule.end:
             t0 = time.time()
             train_set.set_epoch(epoch)
+            if sampler:
+                sampler.epoch, sampler.fixed = epoch, epoch >= schedule.end - clean_epochs
             _set_train_mode(net, freeze_bn)
             sums, count, seen, next_report = {}, 0, 0, t0 + PROGRESS_SECONDS
             it = iter(loader)

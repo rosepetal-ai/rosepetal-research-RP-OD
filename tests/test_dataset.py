@@ -147,3 +147,48 @@ def _tag(sample, ctx):
     sample.boxes = np.vstack([sample.boxes, [[5, 5, 25, 25]]])
     sample.labels = np.append(sample.labels, ctx.epoch % 3)
     return sample
+
+
+
+def test_multiscale_sizes():
+    from rpod.data import multiscale_sizes
+    sq = multiscale_sizes([640, 640])
+    assert sq[0] == [480, 480] and sq[-1] == [800, 800] and [640, 640] in sq and len(sq) == 11
+    wide = multiscale_sizes([640, 1568])
+    assert [640, 1568] in wide and all(h % 32 == 0 and w % 32 == 0 for h, w in wide)
+    assert all(abs(w / h - 1568 / 640) < 0.1 for h, w in wide)                       # aspect ratio kept
+
+
+def test_multiscale_sampler_one_size_per_batch():
+    from rpod.data import MultiScaleBatchSampler
+    sizes = [[96, 96], [128, 128], [160, 160]]
+    s = MultiScaleBatchSampler(10, 3, sizes, [128, 128], seed=0, drop_last=False)
+    seen_sizes = set()
+    for epoch in range(4):
+        s.epoch = epoch
+        batches = list(s)
+        assert sorted(i for b in batches for i, _ in b) == list(range(10))              # every image once per epoch
+        assert all(len({size for _, size in b}) == 1 for b in batches)                  # one size per batch
+        seen_sizes |= {b[0][1] for b in batches}
+        assert batches == list(s)                                                       # same epoch, same batches
+    assert seen_sizes == {(96, 96), (128, 128), (160, 160)}
+    s.fixed = True
+    assert {size for b in s for _, size in b} == {(128, 128)}
+
+
+def test_item_at_another_size_keeps_boxes_on_objects(tmp_path):
+    data = make_dataset(tmp_path, {'train': 6, 'val': 1})
+    ds = check_dataset(data, use_cache=False)
+    dataset = DetectionDataset(ds['records']['train'], [128, 128], 3)
+    for i in range(6):
+        gt, _ = dataset.ground_truth(i)
+        if not len(gt):
+            continue
+        for size in ([96, 160], [192, 128]):
+            image, target, meta = dataset[(i, size)]
+            assert list(image.shape[1:]) == size
+            scale, _, _, top, left = meta['geom']
+            b = target['boxes'].numpy() * [size[1], size[0], size[1], size[0]]
+            xyxy = np.c_[b[:, :2] - b[:, 2:] / 2, b[:, :2] + b[:, 2:] / 2]
+            back = (xyxy - [left, top, left, top]) / scale                                # to original pixels
+            assert np.abs(back - gt).max() < 0.5

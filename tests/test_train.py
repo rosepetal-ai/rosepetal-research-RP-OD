@@ -103,3 +103,16 @@ def test_interrupted_run_resumes(tmp_path, monkeypatch):
     assert res['dir'] == run and not (tmp_path / 'runs' / 'train' / 't2').exists()
     assert [int(r['epoch']) for r in csv.DictReader(open(run / 'results.csv'))] == [1, 2, 3, 4]
     assert torch.load(run / 'weights' / 'state.pt', weights_only=True)['epoch'] == 4
+
+
+
+def test_multiscale_training_runs(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv('RPOD_WORKERS', '0')
+    monkeypatch.chdir(tmp_path)
+    data = make_dataset(tmp_path / 'data', {'train': 4, 'val': 2})
+    m = RPOD(backbone='hgnetv2-b0')
+    res = m.train(data, imgsz=160, epochs=3, patience=3, batch=2, device='cpu', name='ms', multiscale=True)
+    out = capsys.readouterr().out
+    assert 'multi-scale: 3 sizes from 128x128 to 192x192, the last 1 epoch(s) at 160x160' in out
+    assert yaml.safe_load(open(res['dir'] / 'args.yaml'))['multiscale'] is True
+    assert m.imgsz == [160, 160] and len(list(csv.DictReader(open(res['dir'] / 'results.csv')))) == 3
