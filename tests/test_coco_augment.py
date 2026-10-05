@@ -50,3 +50,19 @@ def test_last_epochs_are_clean():
         assert A.augment(s, SimpleNamespace(epoch=epoch, epochs=epochs, rng=np.random.default_rng(0))) is s
     changed = [A.augment(s, SimpleNamespace(epoch=95, epochs=100, rng=np.random.default_rng(k))) is not s for k in range(10)]
     assert any(changed)                                                        # epoch 95 of 100 still augments
+
+
+
+def test_mosaic_keeps_boxes_on_their_objects():
+    A.P_PHOTOMETRIC = 0.0
+    for i in range(100):
+        rng = np.random.default_rng(i)
+        ctx = SimpleNamespace(epoch=0, epochs=10, rng=rng, imgsz=[160, 200], sample=lambda k: [scene() for _ in range(k)])
+        out = A.mosaic([scene()] + ctx.sample(3), ctx.imgsz, rng)
+        assert out.image.shape == (320, 400, 3) and len(out.boxes) == len(out.labels) == 16
+        for (x0, y0, x1, y1), c in zip(out.boxes, out.labels):
+            if x1 - x0 < 2 or y1 - y0 < 2:                          # cut by the canvas edge: the dataset drops it
+                continue
+            inner = out.image[int(np.ceil(y0)) + 1:int(y1) - 1, int(np.ceil(x0)) + 1:int(x1) - 1].reshape(-1, 3)
+            if len(inner):
+                assert (np.abs(inner.astype(int) - COLORS[c]).max(1) <= 2).mean() > 0.95   # bilinear resize at edges

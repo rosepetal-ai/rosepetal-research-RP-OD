@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # the RP-OD repo,
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import rpod.engine.trainer as trainer  # noqa: E402
+import augment as augment_module  # noqa: E402
 from augment import augment  # noqa: E402
 from rpod import RPOD  # noqa: E402
 
@@ -41,6 +42,7 @@ p.add_argument('--small-objects', type=int, default=1)
 p.add_argument('--decoder-layers', type=int, default=6)
 p.add_argument('--multiscale', type=int, default=0, help='1: train at random sizes from 480 to 800 (last epochs at 640)')
 p.add_argument('--focus-small', type=int, default=0, help='1: train with priority for small objects')
+p.add_argument('--mosaic', type=int, default=0, help='1: mosaic augmentation with probability 0.5')
 p.add_argument('--init', default=None, help='checkpoint to start from, any configuration (loads what fits)')
 p.add_argument('--resume', default=None, help='weights/state.pt of an interrupted run: everything else comes from it')
 a = p.parse_args()
@@ -55,6 +57,7 @@ if a.resume:      # same configuration, recipe, data, epochs and batch as the in
     a.lr, a.backbone_lr, a.init = run_args['recipe']['lr'], run_args['recipe']['backbone_lr'], None
     a.multiscale = int(run_args.get('multiscale', False))
     a.focus_small = int(run_args.get('focus_small', False))
+    a.mosaic = int(run_args['recipe'].get('mosaic', 0))
     a.final_fraction = run_args['recipe']['final_fraction']
 elif not a.name:
     p.error('--name is required (unless --resume)')
@@ -65,6 +68,8 @@ if a.lr is not None:
 if a.backbone_lr is not None:
     trainer.RECIPE['backbone_lr'] = a.backbone_lr
 trainer.RECIPE['final_fraction'] = a.final_fraction
+augment_module.P_MOSAIC = 0.5 if a.mosaic else 0.0
+trainer.RECIPE['mosaic'] = a.mosaic                 # recorded in args.yaml and the resumable state
 model = RPOD(backbone=a.backbone, neck_size=a.neck_size, small_objects=bool(a.small_objects),
              decoder_layers=a.decoder_layers)
 if a.init:

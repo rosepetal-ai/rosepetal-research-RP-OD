@@ -7,8 +7,14 @@ from 14.5 to 12.0 while validation dropped from 50.6 to 49.8. It runs on the ori
 changing the image content is what gives scale variety with a fixed input: zooming out makes the objects smaller on the
 canvas, cropping makes them bigger.
 
+Optional mosaic (P_MOSAIC, train_coco.py --mosaic 1; YOLO, DEIM): four training images in a 2x2 grid around a random
+centre, on a canvas twice the model input, so objects arrive at about half their size: more small objects and more
+context per image. After a mosaic come the photometric distortion, the IoU crop and the flip, not the zoom-out
+(the objects are already halved).
+
 Differences with the RT-DETR pipeline: the image is letterboxed (aspect ratio kept, like YOLO and like production)
-instead of stretched to 640x640, the zoom-out fill is the letterbox gray, and there is no multi-scale input size.
+instead of stretched to 640x640, and the zoom-out fill is the letterbox gray. Multi-scale input sizes come from the
+trainer (train_coco.py --multiscale 1).
 """
 import numpy as np
 from PIL import Image, ImageEnhance
@@ -16,6 +22,7 @@ from PIL import Image, ImageEnhance
 from rpod.data.dataset import Sample
 
 P_PHOTOMETRIC, P_ZOOM_OUT, P_IOU_CROP, P_FLIP = 0.5, 0.5, 0.8, 0.5
+P_MOSAIC = 0.0                                       # 0.5 with train_coco.py --mosaic 1
 ZOOM_OUT_MAX = 4.0                                   # canvas up to 4x the image side
 FILL = 114                                           # same gray as the letterbox padding
 CROP_SCALE, CROP_ASPECT, CROP_TRIALS = (0.3, 1.0), (0.5, 2.0), 40
@@ -27,9 +34,12 @@ def augment(sample, ctx):
     if ctx.epoch >= ctx.epochs - max(1, round(NO_AUG_FRACTION * ctx.epochs)):
         return sample
     rng = ctx.rng
+    mosaic_done = rng.random() < P_MOSAIC
+    if mosaic_done:
+        sample = mosaic([sample] + ctx.sample(3), ctx.imgsz, rng)
     if rng.random() < P_PHOTOMETRIC:
         sample = Sample(photometric(sample.image, rng), sample.boxes, sample.labels, sample.path)
-    if rng.random() < P_ZOOM_OUT:
+    if not mosaic_done and rng.random() < P_ZOOM_OUT:
         sample = zoom_out(sample, rng)
     if rng.random() < P_IOU_CROP:
         sample = iou_crop(sample, rng)
@@ -55,6 +65,30 @@ def photometric(image, rng):
     if not contrast_first and rng.random() < 0.5:
         im = ImageEnhance.Contrast(im).enhance(rng.uniform(0.5, 1.5))
     return np.asarray(im)
+
+
+def mosaic(samples, imgsz, rng):
+    """Four samples in a 2x2 grid on a (2h, 2w) canvas, h x w = the model input; the grid centre is random in the
+    middle half. Each image is resized so its longer side fits the input (as in YOLO) and placed against the centre;
+    what falls outside the canvas is cut, and the boxes with it (the dataset drops those left under 1 pixel)."""
+    h, w = imgsz
+    canvas = np.full((2 * h, 2 * w, 3), FILL, np.uint8)
+    yc, xc = int(rng.uniform(0.5 * h, 1.5 * h)), int(rng.uniform(0.5 * w, 1.5 * w))
+    boxes, labels = [], []
+    for k, s in enumerate(samples):
+        ih, iw = s.image.shape[:2]
+        r = min(h / ih, w / iw)
+        nh, nw = max(1, round(ih * r)), max(1, round(iw * r))
+        img = np.asarray(Image.fromarray(s.image).resize((nw, nh), Image.BILINEAR))
+        x0, y0 = (xc - nw, yc - nh) if k == 0 else (xc, yc - nh) if k == 1 else (xc - nw, yc) if k == 2 else (xc, yc)
+        cx0, cy0, cx1, cy1 = max(x0, 0), max(y0, 0), min(x0 + nw, 2 * w), min(y0 + nh, 2 * h)
+        canvas[cy0:cy1, cx0:cx1] = img[cy0 - y0:cy1 - y0, cx0 - x0:cx1 - x0]
+        b = s.boxes * r + np.array([x0, y0, x0, y0], np.float32)
+        b[:, 0::2] = b[:, 0::2].clip(cx0, cx1)
+        b[:, 1::2] = b[:, 1::2].clip(cy0, cy1)
+        boxes.append(b)
+        labels.append(s.labels)
+    return Sample(canvas, np.concatenate(boxes).astype(np.float32), np.concatenate(labels), samples[0].path)
 
 
 def zoom_out(sample, rng):
