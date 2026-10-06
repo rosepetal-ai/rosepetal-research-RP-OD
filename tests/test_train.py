@@ -116,18 +116,3 @@ def test_multiscale_training_runs(tmp_path, monkeypatch, capsys):
     assert 'multi-scale: 3 sizes from 128x128 to 192x192, the last 1 epoch(s) at 160x160' in out
     assert yaml.safe_load(open(res['dir'] / 'args.yaml'))['multiscale'] is True
     assert m.imgsz == [160, 160] and len(list(csv.DictReader(open(res['dir'] / 'results.csv')))) == 3
-
-
-
-def test_focus_small_training(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv('RPOD_WORKERS', '0')
-    monkeypatch.chdir(tmp_path)
-    data = make_dataset(tmp_path / 'data', {'train': 4, 'val': 2})
-    m = RPOD(backbone='hgnetv2-b0')
-    res = m.train(data, imgsz=160, epochs=2, patience=2, batch=2, device='cpu', name='fs', focus_small=True)
-    out = capsys.readouterr().out
-    assert 'focus_small: small objects weigh up to 3x, 30% of the candidates reserved for the finest level' in out
-    assert yaml.safe_load(open(res['dir'] / 'args.yaml'))['focus_small'] is True
-    assert torch.load(res['dir'] / 'weights' / 'best.pt', weights_only=True)['fine_query_fraction'] == 0.3
-    assert RPOD(res['dir'] / 'weights' / 'best.pt').net.decoder.fine_query_fraction == 0.3
-    assert m.net.decoder.fine_query_fraction == 0.3 and 'recall_small' in res['val'].to_dict()

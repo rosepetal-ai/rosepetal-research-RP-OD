@@ -17,6 +17,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import yaml
+
 TZ = ZoneInfo('Europe/Madrid')
 REFERENCES = [('RT-DETR-R18', 46.5), ('D-FINE-M', 52.3)]                     # official COCO val2017 AP, as published   # official COCO val2017 AP, as published
 PROGRESS = re.compile(r'^\s+epoch (\d+)/(\d+) \[.*\]\s+(\d+)% · (\d+)/(\d+) steps · loss ([\d.]+) · (\d+) img/s · ~(\d+) min left')
@@ -40,7 +42,8 @@ def state(work, run, reference):
     log = (work / 'logs' / f'{run}.log').read_text(errors='replace').splitlines() if (work / 'logs' / f'{run}.log').exists() else []
     progress = next((m for m in map(PROGRESS.match, reversed(log)) if m), None)
     args_file = work / 'runs/train' / run / 'args.yaml'
-    total = int(re.search(r'^epochs: (\d+)', args_file.read_text(), re.M).group(1)) if args_file.exists() else None
+    run_args = yaml.safe_load(args_file.read_text()) if args_file.exists() else {}
+    total = run_args.get('epochs')
     official = []
     f = work / 'logs/official.txt'
     for line in (f.read_text().splitlines() if f.exists() else []):
@@ -68,7 +71,20 @@ def state(work, run, reference):
     return {'run': run, 'reference': reference, 'rows': rows, 'ref': ref, 'total': total, 'done': done, 'status': status,
             'progress': progress.groups() if progress else None, 'eta': eta, 'now': now, 'official': official,
             'log': [l for l in log if l.startswith(('epoch ', 'val ', '  epoch', '===', 'no improvement', 'best epoch'))][-12:],
-            'args': args_file.read_text() if args_file.exists() else ''}
+            'args': args_file.read_text() if args_file.exists() else '', 'meta': describe(run_args)}
+
+
+def describe(a):
+    """One line with the model and the recipe of the run, from its args.yaml."""
+    if not a:
+        return ''
+    m, r = a['model'], a.get('recipe', {})
+    parts = [f"{m['backbone']} · neck {m['neck']['size']} · {m['decoder']['layers']} decoder layers",
+             f"{a['imgsz'][0]}×{a['imgsz'][1]}", f"lr {r.get('lr', 0):g} / backbone {r.get('backbone_lr', 0):g}",
+             f"batch {a['batch']}"]
+    parts += ['multi-scale'] if a.get('multiscale') else []
+    parts += ['mosaic'] if r.get('mosaic') else []
+    return ' · '.join(parts)
 
 
 def page(s):
@@ -116,7 +132,8 @@ def page(s):
         official=(f"<h2>Official COCO numbers (pycocotools, val2017)</h2><table><thead><tr><th>model</th><th>params M</th>"
                   f"<th>AP</th><th>AP50</th><th>AP75</th><th>APs</th><th>APm</th><th>APl</th></tr></thead>"
                   f"<tbody>{official_rows}</tbody></table>") if official_rows else '',
-        log=html.escape('\n'.join(s['log'])), args=html.escape(s['args']), data=json.dumps(data))
+        log=html.escape('\n'.join(s['log'])), args=html.escape(s['args']), meta=html.escape(s['meta']),
+        data=json.dumps(data))
 
 
 TEMPLATE = """<!doctype html>
@@ -167,7 +184,7 @@ pre {{ background:var(--surface-1); border:1px solid var(--border); border-radiu
 </style></head>
 <body><div class="viz-root"><div class="wrap">
 <h1>RP-OD on COCO · {run}</h1>
-<div class="meta">HGNetv2-B2 · neck l · P2 · 6 decoder layers · 640×640 · lr 2e-4 / backbone 2e-5 · batch 32 · updated {updated} (Madrid) · reloads every minute</div>
+<div class="meta">{meta} · updated {updated} (Madrid) · reloads every minute</div>
 <div class="status">{status_txt}</div>
 <div class="tiles">
   <div class="tile hero"><div class="label">Best val mAP50-95</div><div class="value">{best}</div><div class="sub">{best_sub}</div></div>

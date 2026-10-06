@@ -17,5 +17,5 @@ pycocotools. Differences: letterbox instead of stretching to a square; multi-sca
 `--multiscale 1`. Learning rate flat for the first half and decaying over the second (`--final-fraction 0.5`),
 augmentations and multi-scale off for the last 4 % of the epochs.
 
-The maximum model (HGNetv2-B2 · neck `l` · P2 · 6 decoder layers) is trained once; every smaller configuration loads
+The maximum model (HGNetv2-B2 · neck `l` · 6 decoder layers) is trained once; every smaller configuration loads
 all its weights from it (`tests/test_checkpoint_predict_export.py`), and keeping the first N decoder layers is exact.

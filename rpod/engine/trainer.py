@@ -32,11 +32,10 @@ from .validator import validate
 
 RECIPE = dict(lr=1e-4, backbone_lr=1e-4, weight_decay=1e-4, betas=(0.9, 0.999), warmup_steps=2000, warmup_max_fraction=0.05,
               final_fraction=0.2, final_lr_ratio=0.05, ema_decay=0.9999, ema_tau=2000, clip_grad=0.1,
-              freeze_backbone_bn_below=8, clean_fraction=0.04, small_weight_max=3.0, fine_query_fraction=0.3, seed=0)
-SMALL_SIDE = 32.0     # objects smaller than 32x32 pixels at the model input are small (as in the metrics)
+              freeze_backbone_bn_below=8, clean_fraction=0.04, seed=0)
 PROGRESS_SECONDS = 120      # one progress line this often inside an epoch (none in epochs shorter than this)
 CSV_FIELDS = ['epoch', 'phase', 'lr', 'loss', 'vfl', 'bbox', 'giou', 'map50_95', 'map50', 'map_small', 'map_medium',
-              'map_large', 'precision', 'recall', 'recall_small', 'f1',
+              'map_large', 'precision', 'recall', 'f1',
               'threshold', 'mean_iou', 'fp_per_image', 'fitness', 'best', 'seconds']
 
 
@@ -177,23 +176,6 @@ def _progress(epoch, epochs, step, steps, loss, images, seconds, width=20):
             f'{images / seconds:.0f} img/s · ~{left:.0f} min left')
 
 
-def _small_object_weights(group, cap):
-    """focus_small: each object's weight min(cap, max(1, 32 / side)), side = sqrt(area) in pixels at the model input,
-    scaled so the weights average 1 over the effective batch (the total loss stays the same)."""
-    raw = []
-    for images, targets, _ in group:
-        h, w = images.shape[-2:]
-        for t in targets:
-            side = (t['boxes'][:, 2] * w * t['boxes'][:, 3] * h).clamp(min=1e-6).sqrt()
-            raw.append((SMALL_SIDE / side).clamp(1.0, cap))
-    n = sum(len(x) for x in raw)
-    scale = n / max(float(sum(x.sum() for x in raw)), 1e-6)
-    it = iter(raw)
-    for _, targets, _ in group:
-        for t in targets:
-            t['weights'] = next(it) * scale
-
-
 def _run_dir(project, name):
     base = Path(project) / name
     path, k = base, 2
@@ -204,14 +186,11 @@ def _run_dir(project, name):
 
 
 def train(model, data, imgsz, epochs, patience, batch, device, augment, name, project='runs/train', workers=None,
-          save_state=False, resume=None, multiscale=False, focus_small=False):
+          save_state=False, resume=None, multiscale=False):
     """Trains `model` (an RPOD) in place and returns {'dir', 'best_epoch', 'val', 'test'}.
 
     multiscale: every batch at a random size from 0.75x to 1.25x imgsz (letterboxed from the original images), and the
     last clean_fraction of the epochs (at least one) at imgsz; validation is always at imgsz.
-    focus_small: small objects (< 32x32 at the model input) weigh up to small_weight_max times more in the loss, a
-    fine_query_fraction of the decoder's candidates is reserved for the finest level (kept in the model), and the best
-    epoch and the threshold are chosen for small objects (see rpod.utils.metrics).
 
     save_state: also write weights/state.pt after every epoch (optimizer, EMA, schedule, best so far), so a long run
     that gets interrupted can continue with resume=<that file> and the same arguments. Not part of RPOD.train.
@@ -237,8 +216,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
 
     # ---- model
     num_queries = queries_for(stats['max_objects_per_image'])
-    fine = r['fine_query_fraction'] if focus_small else 0.0
-    d = derive(model.cfg, len(names), num_queries, fine)
+    d = derive(model.cfg, len(names), num_queries)
     sizes = multiscale_sizes(imgsz) if multiscale else [list(imgsz)]
     check_input_size(d['levels'], sizes[0], num_queries)
     net = Detector(d, pretrained_backbone=state is None)
@@ -246,7 +224,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
         net.load_state_dict(state['net'])
         log(f"resuming {state['args']['name']} at epoch {state['epoch'] + 1}")
     elif model.net is not None:
-        report = load_weights(net, model.net.state_dict(), model.net.backbone.levels, net.backbone.levels)
+        report = load_weights(net, model.net.state_dict())
         log(f"starting from the current weights: {report['summary']}")
     net.to(device)
     amp_dtype = _amp(device)
@@ -302,8 +280,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     args = {'data': str(Path(data).resolve()), 'imgsz': list(imgsz), 'epochs': epochs, 'patience': patience, 'batch': batch,
             'device': str(device), 'augment': getattr(augment, '__name__', None) if augment else None, 'name': run.name,
             'model': to_dict(model.cfg), 'classes': names, 'num_queries': num_queries, 'micro_batch': micro,
-            'accumulate': accumulate, 'backbone_bn_frozen': freeze_bn, 'multiscale': bool(multiscale),
-            'focus_small': bool(focus_small), 'recipe': {k: list(v) if isinstance(v, tuple) else v
+            'accumulate': accumulate, 'backbone_bn_frozen': freeze_bn, 'multiscale': bool(multiscale), 'recipe': {k: list(v) if isinstance(v, tuple) else v
                                                                                    for k, v in r.items()}}
     if state:
         args['name'] = state['args']['name']
@@ -314,10 +291,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     if not state:
         writer.writeheader()
     csv_file.flush()
-    extra = {'data': args['data'], 'fine_query_fraction': fine}
-    if focus_small:
-        log(f"focus_small: small objects weigh up to {r['small_weight_max']:g}x, {fine:.0%} of the candidates reserved "
-            f"for the finest level, best epoch and threshold chosen for small objects")
+    extra = {'data': args['data']}
     log(f'results: {run}')
 
     try:
@@ -342,8 +316,6 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                 if not group:
                     break
                 total_boxes = sum(len(t['labels']) for _, targets, _ in group for t in targets)
-                if focus_small:
-                    _small_object_weights(group, r['small_weight_max'])
                 for images, targets, _ in group:
                     images = images.to(device, non_blocking=True)
                     targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -367,10 +339,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                                   seen, time.time() - t0))
             means = {k: v * accumulate / max(count, 1) for k, v in sums.items()}   # per effective batch
 
-            metrics = validate(ema.ema, val_set, names, device, micro, amp_dtype=amp_dtype, focus_small=focus_small)
-            if focus_small and epoch == (state['epoch'] if state else 0) and metrics.size_objects.get('small', 0) < 20:
-                log(f"focus_small: only {metrics.size_objects.get('small', 0)} small objects in validation, so the "
-                    f"choice of the best epoch and the threshold for them will be noisy")
+            metrics = validate(ema.ema, val_set, names, device, micro, amp_dtype=amp_dtype)
             phase = schedule.phase(epoch)
             improved = metrics.fitness > best_fitness
             if improved:
@@ -413,7 +382,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
 
     # ---- final: best weights, plots, test
     best = torch.load(run / 'weights' / 'best.pt', map_location='cpu', weights_only=True)
-    net = Detector(derive(model.cfg, len(names), num_queries, fine), pretrained_backbone=False)
+    net = Detector(derive(model.cfg, len(names), num_queries), pretrained_backbone=False)
     net.load_state_dict(best['state_dict'])
     net.to(device).eval()
     threshold = best['threshold']
@@ -426,5 +395,5 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                                 amp_dtype=amp_dtype)
         log(f'\ntest (never used for any decision), threshold {threshold:.3f}')
         log(test_metrics.table(names))
-    model._adopt(net.eval(), names, imgsz, threshold, num_queries, run / 'weights' / 'best.pt', args['data'], fine)
+    model._adopt(net.eval(), names, imgsz, threshold, num_queries, run / 'weights' / 'best.pt', args['data'])
     return {'dir': run, 'best_epoch': best_epoch + 1, 'val': val_metrics, 'test': test_metrics}

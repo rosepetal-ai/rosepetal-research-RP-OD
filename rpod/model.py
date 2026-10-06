@@ -35,7 +35,6 @@ class RPOD:
         self.threshold = None
         self.data = None           # dataset the model was trained on
         self.num_queries = queries_for(0)
-        self.fine_query_fraction = 0.0   # candidates reserved for the finest level (set by training with focus_small)
         if model is not None and str(model).endswith('.pt'):
             if args:
                 raise ValueError('architecture arguments only apply to new models, not to a checkpoint')
@@ -44,7 +43,6 @@ class RPOD:
             self.cfg = ckpt['config']
             self.names, self.imgsz = ckpt['names'], ckpt['imgsz']
             self.threshold, self.num_queries = ckpt['threshold'], ckpt['num_queries']
-            self.fine_query_fraction = ckpt.get('fine_query_fraction', 0.0)
             self.data = ckpt.get('data')
             self.net = build_from_checkpoint(ckpt).eval()
         else:
@@ -53,7 +51,7 @@ class RPOD:
     def __repr__(self):
         c = self.cfg
         state = f"trained, {len(self.names)} classes, {self.imgsz[0]}x{self.imgsz[1]}" if self.names else 'not trained'
-        return (f'RPOD(backbone={c.backbone}, neck={c.neck.size}{", small_objects" if c.neck.small_objects else ""}, '
+        return (f'RPOD(backbone={c.backbone}, neck={c.neck.size}, '
                 f'decoder_layers={c.decoder.layers}; {state})')
 
     # -------------------------------------------------------------------------------------------- inspect
@@ -88,7 +86,7 @@ class RPOD:
 
     # -------------------------------------------------------------------------------------------- train / validate
     def train(self, data, imgsz=640, epochs=150, patience=20, batch=4, device=None, augment=None, name='exp',
-              multiscale=False, focus_small=False):
+              multiscale=False):
         """Train on a YOLO dataset (data.yaml). Afterwards this object is the best model (runs/train/<name>/weights/best.pt).
 
         imgsz: int or [height, width], rounded up to multiples of 32; it is the size used in production too.
@@ -98,13 +96,10 @@ class RPOD:
         augment: optional function(sample, ctx) -> sample from your augmentation library (training images only).
         multiscale: train every batch at a random size from 0.75x to 1.25x imgsz (the last epochs at imgsz), so the
             model learns objects at more scales; validation and production stay at imgsz.
-        focus_small: give priority to small objects (< 32x32 pixels at the model input): they weigh more in training,
-            some decoder candidates are reserved for the finest level, and the best epoch and the recommended
-            threshold are chosen for them.
         Returns {'dir', 'best_epoch', 'val', 'test'} with the final metrics.
         """
         return _train(self, data, _size(imgsz), int(epochs), int(patience), int(batch), device or _default_device(),
-                      augment, name, multiscale=multiscale, focus_small=focus_small)
+                      augment, name, multiscale=multiscale)
 
     def val(self, data=None, split='val', device=None, batch=16, name='exp'):
         """Metrics and plots (runs/val/<name>) on a split of the training dataset or of another dataset with the same
@@ -126,10 +121,9 @@ class RPOD:
         print(metrics.table(self.names))
         return metrics
 
-    def _adopt(self, net, names, imgsz, threshold, num_queries, ckpt_path, data, fine_query_fraction=0.0):
+    def _adopt(self, net, names, imgsz, threshold, num_queries, ckpt_path, data):
         self.net, self.names, self.imgsz, self.threshold = net, names, list(imgsz), threshold
         self.num_queries, self.ckpt_path, self.data = num_queries, Path(ckpt_path), data
-        self.fine_query_fraction = fine_query_fraction
 
     # -------------------------------------------------------------------------------------------- use
     def predict(self, source, color='RGB', conf=None, max_det=100, device=None):

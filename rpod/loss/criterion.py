@@ -1,11 +1,7 @@
 """Losses (training only): IoU-aware classification (VFL) + L1 + GIoU, on every decoder layer, the top-K proposals
 and the denoising queries.
 
-targets: list (one per image) of {'labels': int64 [N], 'boxes': float [N, 4] cxcywh normalized} and optionally
-'weights' [N]: how much each object counts (focus_small gives small objects more). Every loss term of an object - its
-class score, L1 and GIoU, on every layer, the top-K proposals and the denoising queries - is multiplied by its weight.
-The trainer scales the weights to average 1 over the effective batch, so the total stays the same and only the share
-of each object changes.
+targets: list (one per image) of {'labels': int64 [N], 'boxes': float [N, 4] cxcywh normalized}.
 """
 import torch
 import torch.nn as nn
@@ -35,8 +31,6 @@ class SetCriterion(nn.Module):
         src_boxes = pred_boxes[idx]
         tgt_boxes = torch.cat([t['boxes'][j] for t, (_, j) in zip(targets, indices)]).to(dev)
         tgt_labels = torch.cat([t['labels'][j] for t, (_, j) in zip(targets, indices)]).to(dev)
-        tgt_w = (torch.cat([t['weights'][j] for t, (_, j) in zip(targets, indices)]).to(dev, logits.dtype)
-                 if 'weights' in targets[0] else torch.ones(len(tgt_labels), dtype=logits.dtype, device=dev))
         # VFL: the target score of a matched query is its IoU with the GT (IoU-aware classification)
         ious = paired_iou(cxcywh_to_xyxy(src_boxes), cxcywh_to_xyxy(tgt_boxes)).detach()
         tgt_cls = torch.full(logits.shape[:2], self.num_classes, dtype=torch.int64, device=dev)
@@ -45,14 +39,12 @@ class SetCriterion(nn.Module):
         score = torch.zeros(logits.shape[:2], dtype=logits.dtype, device=dev)
         score[idx] = ious.to(logits.dtype)
         tgt_score = score[..., None] * onehot
-        obj_w = torch.ones(logits.shape[:2], dtype=logits.dtype, device=dev)
-        obj_w[idx] = tgt_w
-        weight = self.alpha * logits.sigmoid().detach().pow(self.gamma) * (1 - onehot) + tgt_score * obj_w[..., None]
+        weight = self.alpha * logits.sigmoid().detach().pow(self.gamma) * (1 - onehot) + tgt_score
         vfl = F.binary_cross_entropy_with_logits(logits, tgt_score, weight=weight, reduction='none')
         losses = {'vfl': vfl.mean(1).sum() * logits.shape[1] / num_boxes}
         if len(tgt_boxes):
-            losses['bbox'] = (F.l1_loss(src_boxes, tgt_boxes, reduction='none').sum(-1) * tgt_w).sum() / num_boxes
-            losses['giou'] = ((1 - paired_giou(cxcywh_to_xyxy(src_boxes), cxcywh_to_xyxy(tgt_boxes))) * tgt_w).sum() / num_boxes
+            losses['bbox'] = F.l1_loss(src_boxes, tgt_boxes, reduction='sum') / num_boxes
+            losses['giou'] = (1 - paired_giou(cxcywh_to_xyxy(src_boxes), cxcywh_to_xyxy(tgt_boxes))).sum() / num_boxes
         else:
             losses['bbox'] = losses['giou'] = pred_boxes.sum() * 0.0
         return losses

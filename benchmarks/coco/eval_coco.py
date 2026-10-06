@@ -2,8 +2,8 @@
 regions ignored, up to 100 detections per image, AP by object size).
 
 --decoder-layers N evaluates the same weights keeping only the first N decoder layers, without retraining: every layer
-was trained with its own loss, so each one is already a complete detector. --neck-size and --small-objects load the
-weights into a smaller neck or without P2 (approximate without fine-tuning: shows how much a reduction loses).
+was trained with its own loss, so each one is already a complete detector. --neck-size loads the weights into a
+smaller neck (approximate without fine-tuning: shows how much the reduction loses).
 --imgsz evaluates at another input size (the network has no size-specific weights) and --queries keeps another number
 of candidates for the decoder; both without retraining. APs50 / APs75: small objects at IoU 0.5 and 0.75.
 
@@ -37,7 +37,7 @@ STATS = ['AP', 'AP50', 'AP75', 'APs', 'APm', 'APl', 'AR1', 'AR10', 'AR100', 'ARs
 
 @torch.no_grad()
 def evaluate(ckpt, data='coco/coco.yaml', ann='coco/annotations/instances_val2017.json', decoder_layers=None,
-             neck_size=None, small_objects=None, imgsz=None, queries=None, batch=32, workers=8):
+             neck_size=None, imgsz=None, queries=None, batch=32, workers=8):
     model = RPOD(ckpt)
     imgsz = [imgsz, imgsz] if isinstance(imgsz, int) else list(imgsz or model.imgsz)
     cfg = model.cfg
@@ -45,12 +45,10 @@ def evaluate(ckpt, data='coco/coco.yaml', ann='coco/annotations/instances_val201
         raise ValueError(f'the checkpoint has {cfg.decoder.layers} decoder layers')
     cfg = dataclasses.replace(
         cfg, decoder=dataclasses.replace(cfg.decoder, layers=decoder_layers or cfg.decoder.layers),
-        neck=dataclasses.replace(cfg.neck, size=neck_size or cfg.neck.size,
-                                 small_objects=cfg.neck.small_objects if small_objects is None else bool(small_objects)))
+        neck=dataclasses.replace(cfg.neck, size=neck_size or cfg.neck.size))
     if cfg != model.cfg:
-        net = Detector(derive(cfg, len(model.names), model.num_queries, model.fine_query_fraction),
-                       pretrained_backbone=False)
-        load_weights(net, model.net.state_dict(), model.net.backbone.levels, net.backbone.levels)
+        net = Detector(derive(cfg, len(model.names), model.num_queries), pretrained_backbone=False)
+        load_weights(net, model.net.state_dict())
     else:
         net = model.net
     net = net.cuda().eval()
@@ -86,7 +84,7 @@ def evaluate(ckpt, data='coco/coco.yaml', ann='coco/annotations/instances_val201
         stats[name] = round(100 * float(p[p > -1].mean()), 1)
     params = sum(p.numel() for p in net.parameters()) / 1e6
     c = cfg
-    row = {'model': f'{c.backbone} · neck {c.neck.size}{" · P2" if c.neck.small_objects else ""} · {c.decoder.layers} layers',
+    row = {'model': f'{c.backbone} · neck {c.neck.size} · {c.decoder.layers} layers',
            'params_M': round(params, 1), 'imgsz': imgsz, 'queries': net.decoder.num_queries, **stats,
            'checkpoint': str(ckpt)}
     return row
@@ -99,7 +97,6 @@ if __name__ == '__main__':
     p.add_argument('--ann', default='coco/annotations/instances_val2017.json')
     p.add_argument('--decoder-layers', type=int, default=None)
     p.add_argument('--neck-size', default=None)
-    p.add_argument('--small-objects', type=int, default=None)
     p.add_argument('--imgsz', type=int, default=None)
     p.add_argument('--queries', type=int, default=None)
     p.add_argument('--batch', type=int, default=32)

@@ -73,26 +73,24 @@ def test_export_contract(trained_ckpt):
 
 
 def test_partial_loading_across_knobs():
-    src = make_net(num_classes=80, decoder_layers=6)                       # e.g. a pretrained model
-    dst = Detector(derive(load_config(small_objects=True, decoder_layers=3), 3), pretrained_backbone=False)
-    report = load_weights(dst, src.state_dict(), src_levels=[3, 4, 5], dst_levels=[2, 3, 4, 5])
-    assert report['loaded_fraction'] > 0.85 and report['adapted_levels'] > 0
-    assert 'decoder.enc_score_head' in report['reinitialized']              # classes differ: fresh class heads
-    sd = src.state_dict()
-    w = dst.state_dict()['decoder.layers.0.cross_attn.attention_weights.weight'].view(8, 4, 4, -1)
-    ws = sd['decoder.layers.0.cross_attn.attention_weights.weight'].view(8, 3, 4, -1)
-    assert torch.equal(w[:, 1:], ws) and torch.equal(w[:, 0], ws[:, 0])     # P3..P5 copied, new P2 starts as P3
+    src = make_net(num_classes=80, neck_size='l', decoder_layers=6)       # e.g. a pretrained model
+    dst = Detector(derive(load_config(neck_size='m', decoder_layers=3), 3), pretrained_backbone=False)
+    report = load_weights(dst, src.state_dict())
+    assert report['loaded_fraction'] > 0.95
+    assert {'decoder.enc_score_head', 'decoder.dec_score_head', 'decoder.denoising_class_embed'} <= set(
+        report['reinitialized'])                                         # classes differ: fresh class heads
+    assert torch.equal(dst.state_dict()['neck.fuse_td.p3.blocks.1.conv1.conv.weight'],
+                       src.state_dict()['neck.fuse_td.p3.blocks.1.conv1.conv.weight'])
 
 
 def test_maximum_model_loads_fully_into_every_reduced_config():
     """The pretraining plan: one model with every option at its maximum feeds any smaller configuration."""
-    src = make_net(num_classes=80, neck_size='l', small_objects=True, decoder_layers=6)
+    src = make_net(num_classes=80, neck_size='l', decoder_layers=6)
     for neck in ('s', 'm', 'l'):
-        for small in (False, True):
-            for layers in (3, 6):
-                dst = make_net(num_classes=80, neck_size=neck, small_objects=small, decoder_layers=layers)
-                report = load_weights(dst, src.state_dict(), src.backbone.levels, dst.backbone.levels)
-                assert report['loaded_fraction'] == 1.0, (neck, small, layers, report['summary'])
+        for layers in (3, 4, 5, 6):
+            dst = make_net(num_classes=80, neck_size=neck, decoder_layers=layers)
+            report = load_weights(dst, src.state_dict())
+            assert report['loaded_fraction'] == 1.0, (neck, layers, report['summary'])
 
 
 def test_decoder_truncation_is_exact():
@@ -107,11 +105,3 @@ def test_decoder_truncation_is_exact():
         out_full = full(x)
     assert torch.equal(out_short['pred_logits'], out_full['pred_logits'])
     assert torch.equal(out_short['pred_boxes'], out_full['pred_boxes'])
-
-
-
-def test_export_with_fine_query_quota(tmp_path):
-    from rpod.engine.exporter import export_onnx
-    net = make_net(backbone='hgnetv2-b0')
-    net.decoder.fine_query_fraction = 0.3
-    export_onnx(net, 'hgnetv2-b0', NAMES, [256, 320], 0.5, tmp_path)      # raises if onnxruntime disagrees with torch

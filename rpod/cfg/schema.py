@@ -6,7 +6,6 @@ training, so both live in the checkpoint, not here.
     backbone: hgnetv2-b2
     neck:
       size: m
-      small_objects: false
     decoder:
       layers: 3
 """
@@ -61,12 +60,6 @@ class NeckConfig:
         'neck mixes the scales better, which helps when one image holds objects of very different sizes or the '
         'background is complex. s is faster; l is more precise.',
         choices=['s', 'm', 'l'], why='speed versus precision when mixing scales')
-    small_objects: bool = knob(
-        False, 'Adds a grid twice as fine (each cell covers 4 × 4 pixels instead of 8 × 8). Turn it on only if the '
-        'smallest objects you need to detect are under about 8 pixels at the training size. Before turning it on, '
-        'try a larger input size or cropping the region of interest: it often works as well or better. Roughly '
-        'doubles the compute.',
-        why='better detection of objects a few pixels wide, at a high cost')
 
 
 @dataclass
@@ -92,8 +85,7 @@ class ModelConfig:
 
 
 # ------------------------------------------------------------------------------------------------ loading
-ARG_KEYS = {'backbone': 'backbone', 'neck_size': 'neck.size', 'small_objects': 'neck.small_objects',
-            'decoder_layers': 'decoder.layers'}
+ARG_KEYS = {'backbone': 'backbone', 'neck_size': 'neck.size', 'decoder_layers': 'decoder.layers'}
 
 
 def _names(obj):
@@ -128,7 +120,7 @@ def _set(cfg, dotted, value):
 
 
 def load_config(source=None, **args):
-    """Defaults <- YAML file (optional) <- arguments. Arguments: backbone, neck_size, small_objects, decoder_layers."""
+    """Defaults <- YAML file (optional) <- arguments. Arguments: backbone, neck_size, decoder_layers."""
     cfg = ModelConfig()
     if source is not None:
         path = Path(source)
@@ -183,20 +175,17 @@ def validate(cfg):
 
 
 # ------------------------------------------------------------------------------------------------ derived
-def derive(cfg, num_classes, num_queries=MIN_QUERIES, fine_query_fraction=0.0):
-    """Everything the network needs, computed from the user knobs. Nothing here is user-facing.
-
-    fine_query_fraction: share of the decoder's candidates reserved for the finest level (set by focus_small)."""
-    levels = [2, 3, 4, 5] if cfg.neck.small_objects else [3, 4, 5]
+def derive(cfg, num_classes, num_queries=MIN_QUERIES):
+    """Everything the network needs, computed from the user knobs. Nothing here is user-facing."""
+    levels = [3, 4, 5]                       # strides 8, 16, 32
     return dict(
         timm_name=BACKBONES[cfg.backbone]['timm'], levels=levels, hidden_dim=HIDDEN_DIM,
         attn_layers=ATTENTION['layers'], attn_heads=ATTENTION['heads'], attn_ffn=ATTENTION['ffn_dim'],
         fusion_blocks=NECK_BLOCKS[cfg.neck.size], fusion_expansion=BACKBONES[cfg.backbone]['expansion'],
         num_classes=num_classes, num_queries=max(MIN_QUERIES, num_queries),
         dec_layers=cfg.decoder.layers, dec_heads=DECODER['heads'], dec_points=DECODER['points'],
-        dec_ffn=DECODER['ffn_dim'], anchor_size=0.05 * 2.0 ** (levels[0] - 3),
-        num_denoising=DENOISING['num'], label_noise=DENOISING['label_noise'], box_noise=DENOISING['box_noise'],
-        fine_queries=float(fine_query_fraction))
+        dec_ffn=DECODER['ffn_dim'], anchor_size=0.05,
+        num_denoising=DENOISING['num'], label_noise=DENOISING['label_noise'], box_noise=DENOISING['box_noise'])
 
 
 def queries_for(max_objects_per_image):
@@ -233,7 +222,7 @@ def template():
     """The default model YAML, every knob with its explanation."""
     out = ['# RP-OD model configuration. Only the architecture lives here: classes come from the dataset and the',
            '# input size is chosen when training. Any key can also be passed as an argument, which wins over this file:',
-           "#   RPOD('rpod.yaml', backbone='hgnetv2-b4', neck_size='l', small_objects=True, decoder_layers=4)", '']
+           "#   RPOD('rpod.yaml', backbone='hgnetv2-b4', neck_size='l', decoder_layers=4)", '']
 
     def emit(obj, indent):
         pad = '  ' * indent
@@ -259,7 +248,7 @@ def guide():
         rows.append(f"| `{key}` | `{v}` | {choices} | {f.metadata['why']} | {f.metadata['explanation']} |")
     return '\n'.join([
         '# Model configuration', '',
-        'The model YAML only describes the architecture: four knobs. Classes come from the dataset and the input size',
+        'The model YAML only describes the architecture: three knobs. Classes come from the dataset and the input size',
         'is chosen when training. Arguments passed to `RPOD(...)` win over the YAML. Everything else is fixed or',
         'computed automatically. This page is generated from `rpod/cfg/schema.py`.', '',
         '| Knob | Default | Values | Why it is exposed | Explanation |', '|---|---|---|---|---|', *rows, ''])

@@ -7,8 +7,6 @@
   are ignored. With scale 1 (original pixels) the numbers are those of pycocotools.
 - At a confidence threshold, with IoU >= 0.5: precision, recall, F1, mean IoU of the hits, false positives per image
   and the confusion matrix. The recommended threshold is the one that maximizes the mean F1 over classes.
-- focus_small: the threshold maximizes the F1 where each small object counts twice, and the fitness that picks the best
-  epoch is 0.25 mAP50-95 + 0.25 mAP small + 0.5 recall of small objects (the usual one if there are none).
 """
 from dataclasses import dataclass, field
 
@@ -71,7 +69,7 @@ def _class_matches(preds, gts, c, scales):
     ones of another size, do not count (COCO); so each threshold keeps its own list."""
     T = len(IOU_THRESHOLDS)
     acc = {name: ([[] for _ in range(T)], [[] for _ in range(T)], [0]) for name, _, _ in RANGES}
-    iou05, small05 = [], []
+    iou05 = []
     for (pb, ps, pc), (gb, gc), s in zip(preds, gts, scales):
         m = pc == c
         order = np.argsort(-ps[m], kind='mergesort')
@@ -89,7 +87,6 @@ def _class_matches(preds, gts, c, scales):
                 idx, iou, on_ign = _match(ious, thr, g_ign)
                 if name == 'all' and t == 0:
                     iou05.append(iou)
-                    small05.append((idx >= 0) & (g_area[np.maximum(idx, 0)] <= SIZES[0][2]) if len(g) else idx >= 0)
                 counts = ~(on_ign | ((idx < 0) & d_out))
                 scores[t].append(ds[counts])
                 tps[t].append((idx >= 0)[counts])
@@ -105,9 +102,7 @@ def _class_matches(preds, gts, c, scales):
         out[name] = (s_sorted, t_sorted, n[0])
     sc_all = np.concatenate(acc['all'][0][0]) if acc['all'][0][0] else np.zeros(0)
     ious_all = np.concatenate(iou05) if iou05 else np.zeros(0)
-    order = np.argsort(-sc_all, kind='mergesort')
-    out['iou05'] = ious_all[order]
-    out['small05'] = (np.concatenate(small05) if small05 else np.zeros(0, bool))[order]   # hit on a small object
+    out['iou05'] = ious_all[np.argsort(-sc_all, kind='mergesort')]
     return out
 
 
@@ -138,7 +133,6 @@ class Metrics:
     mean_iou: float
     fp_per_image: float
     fitness: float
-    recall_small: float = -1.0    # recall of small objects at the threshold (IoU >= 0.5); -1: no small object
     map_small: float = -1.0       # mAP50-95 per object size at the model input; -1: no object of that size
     map_medium: float = -1.0
     map_large: float = -1.0
@@ -148,8 +142,8 @@ class Metrics:
     curves: dict = field(default_factory=dict, repr=False)
 
     def to_dict(self):
-        keys = ('map50_95', 'map50', 'map_small', 'map_medium', 'map_large', 'precision', 'recall', 'recall_small', 'f1',
-                'threshold', 'mean_iou', 'fp_per_image', 'fitness')
+        keys = ('map50_95', 'map50', 'map_small', 'map_medium', 'map_large', 'precision', 'recall', 'f1', 'threshold',
+                'mean_iou', 'fp_per_image', 'fitness')
         return {k: float(getattr(self, k)) for k in keys}
 
     def table(self, names):
@@ -168,13 +162,12 @@ class Metrics:
         return '\n'.join(rows)
 
 
-def evaluate(preds, gts, names, threshold=None, scales=None, focus_small=False):
+def evaluate(preds, gts, names, threshold=None, scales=None):
     """preds: per image (boxes xyxy [N, 4], scores [N], classes [N]); gts: per image (boxes xyxy [M, 4], classes [M]).
 
     threshold None: pick the one with the best mean F1 (training validation). A number: use it as given (test).
     scales: per image, model-input pixels per original pixel (the letterbox scale), to measure object sizes at the
     model input; None: original pixels.
-    focus_small: choose the threshold and the fitness for small objects (see the module docstring).
     """
     num_classes = len(names)
     n_images = len(gts)
@@ -189,8 +182,8 @@ def evaluate(preds, gts, names, threshold=None, scales=None, focus_small=False):
             n_by_size[r, c] = n
             for t in range(len(IOU_THRESHOLDS)):
                 ap[r, t, c] = average_precision(tps[t], n)
-        per_class_05.append((m['all'][0][0], m['all'][1][0], m['iou05'], m['small05']))
-    n_gt, n_small = n_by_size[0], n_by_size[1]
+        per_class_05.append((m['all'][0][0], m['all'][1][0], m['iou05']))
+    n_gt = n_by_size[0]
     by_size = {name: float(np.nanmean(ap[r][:, n_by_size[r] > 0])) if (n_by_size[r] > 0).any() else -1.0
                for r, (name, _, _) in enumerate(RANGES) if name != 'all'}
     ap = ap[0]
@@ -199,20 +192,13 @@ def evaluate(preds, gts, names, threshold=None, scales=None, focus_small=False):
     # precision / recall / F1 of every class for every candidate threshold (detection kept if score > threshold)
     P = np.zeros((num_classes, len(THRESHOLDS)))
     R = np.zeros_like(P)
-    F_choose = np.zeros_like(P)          # the F1 the threshold is chosen on (small objects x2 with focus_small)
-    for c, (scores, tp, _, small) in enumerate(per_class_05):
+    for c, (scores, tp, _) in enumerate(per_class_05):
         kept = len(scores) - np.searchsorted(scores[::-1], THRESHOLDS, side='right')   # detections with score > t
         tps = np.concatenate([[0], np.cumsum(tp)])[kept]                               # scores are sorted, high first
         P[c] = tps / np.maximum(kept, 1)
         R[c] = tps / max(n_gt[c], 1)
-        if focus_small:
-            wtp = np.concatenate([[0], np.cumsum(tp.astype(float) + small)])[kept]     # a small hit counts twice
-            wp, wr = wtp / np.maximum(wtp + kept - tps, 1e-12), wtp / max(n_gt[c] + n_small[c], 1)
-            F_choose[c] = 2 * wp * wr / np.maximum(wp + wr, 1e-12)
     F = 2 * P * R / np.maximum(P + R, 1e-12)
-    if not focus_small:
-        F_choose = F
-    mean_f1 = F_choose[present].mean(0) if present.any() else np.zeros(len(THRESHOLDS))
+    mean_f1 = F[present].mean(0) if present.any() else np.zeros(len(THRESHOLDS))
     if threshold is None:
         if mean_f1.max() <= 0:
             threshold = DEFAULT_THRESHOLD                               # nothing found yet: no basis to choose
@@ -220,11 +206,9 @@ def evaluate(preds, gts, names, threshold=None, scales=None, focus_small=False):
             best = np.flatnonzero(mean_f1 >= mean_f1.max() - 1e-12)[-1]   # ties: the highest, fewer false alarms
             threshold = float(THRESHOLDS[best])
 
-    rows, all_ious, fp, small_rec = [], [], 0, []
-    for c, (scores, tp, ious, small) in enumerate(per_class_05):
+    rows, all_ious, fp = [], [], 0
+    for c, (scores, tp, ious) in enumerate(per_class_05):
         keep = scores > threshold
-        if n_small[c]:
-            small_rec.append(int((small & keep).sum()) / n_small[c])
         tp_k = tp & keep
         n_det = int(keep.sum())
         n_tp = int(tp_k.sum())
@@ -243,20 +227,16 @@ def evaluate(preds, gts, names, threshold=None, scales=None, focus_small=False):
     all_ious = np.concatenate(all_ious) if all_ious else np.zeros(0)
     map50_95 = float(np.nanmean(ap[:, present])) if present.any() else 0.0
     recall = mean('recall')
-    recall_small = float(np.mean(small_rec)) if small_rec else -1.0
-    fitness = 0.5 * map50_95 + 0.5 * recall
-    if focus_small and recall_small >= 0:
-        fitness = 0.25 * map50_95 + 0.25 * by_size['small'] + 0.5 * recall_small
     return Metrics(
         map50_95=map50_95, map50=float(np.nanmean(ap[0, present])) if present.any() else 0.0,
         precision=mean('precision'), recall=recall, f1=mean('f1'), threshold=threshold,
         mean_iou=float(all_ious.mean()) if len(all_ious) else 0.0, fp_per_image=fp / max(n_images, 1),
-        fitness=fitness, recall_small=recall_small, map_small=by_size['small'], map_medium=by_size['medium'],
+        fitness=0.5 * map50_95 + 0.5 * recall, map_small=by_size['small'], map_medium=by_size['medium'],
         map_large=by_size['large'], size_objects={name: int(n_by_size[r].sum()) for r, (name, _, _) in enumerate(RANGES)
                                                   if name != 'all'}, per_class=rows,
         confusion_matrix=confusion_matrix(preds, gts, num_classes, threshold),
         curves={'thresholds': THRESHOLDS, 'precision': P, 'recall': R, 'f1': F, 'present': present,
-                'images': n_images, 'pr50': [(s, t, int(n)) for (s, t, _, _), n in zip(per_class_05, n_gt)]})
+                'images': n_images, 'pr50': [(s, t, int(n)) for (s, t, _), n in zip(per_class_05, n_gt)]})
 
 
 def confusion_matrix(preds, gts, num_classes, threshold):

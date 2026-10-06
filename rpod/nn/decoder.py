@@ -115,9 +115,8 @@ def build_denoising_group(targets, num_classes, num_queries, class_embed, num_de
 class Decoder(nn.Module):
     def __init__(self, num_classes, hidden_dim=256, num_queries=300, n_heads=8, n_levels=3, n_points=4,
                  num_layers=6, dim_ff=1024, dropout=0.0, num_denoising=100, label_noise_ratio=0.5,
-                 box_noise_scale=1.0, anchor_size=0.05, fine_query_fraction=0.0):
+                 box_noise_scale=1.0, anchor_size=0.05):
         super().__init__()
-        self.fine_query_fraction = fine_query_fraction     # candidates reserved for the finest level (focus_small)
         d = hidden_dim
         self.num_classes, self.num_queries, self.num_layers = num_classes, num_queries, num_layers
         self.num_denoising, self.label_noise_ratio, self.box_noise_scale = num_denoising, label_noise_ratio, box_noise_scale
@@ -161,18 +160,6 @@ class Decoder(nn.Module):
         anchors = torch.where(valid, anchors, torch.full_like(anchors, float('inf')))
         return anchors, valid
 
-    def _select(self, scores, spatial_shapes):
-        """Indices of the K candidates [B, K]: the highest scores, with a share reserved for the finest level so that
-        small objects (whose candidates score lower) always reach the decoder."""
-        k = self.num_queries
-        n_fine = spatial_shapes[0][0] * spatial_shapes[0][1]
-        k_fine = min(round(self.fine_query_fraction * k), n_fine)
-        if k_fine == 0:
-            return scores.topk(k, dim=1).indices
-        fine = scores[:, :n_fine].topk(k_fine, dim=1).indices
-        rest = scores.scatter(1, fine, float('-inf')).topk(k - k_fine, dim=1).indices
-        return torch.cat([fine, rest], 1)
-
     def forward(self, feats, targets=None):
         spatial_shapes = [(f.shape[2], f.shape[3]) for f in feats]
         memory = torch.cat([contiguous_grad(f).flatten(2).transpose(1, 2) for f in feats], 1)  # [B, 8400, d] at 640
@@ -189,7 +176,7 @@ class Decoder(nn.Module):
         out_memory = self.enc_output(valid.to(memory.dtype) * memory)
         enc_logits = self.enc_score_head(out_memory)
         enc_box_unact = self.enc_bbox_head(out_memory) + anchors
-        topk = self._select(enc_logits.max(-1).values, spatial_shapes)  # [B, K]
+        topk = enc_logits.max(-1).values.topk(self.num_queries, dim=1).indices  # [B, K]
         ref_unact = enc_box_unact.gather(1, topk[..., None].expand(-1, -1, 4))
         enc_topk_logits = enc_logits.gather(1, topk[..., None].expand(-1, -1, self.num_classes))
         enc_topk_boxes = ref_unact.sigmoid()

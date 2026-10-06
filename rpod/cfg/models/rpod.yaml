@@ -1,6 +1,6 @@
 # RP-OD model configuration. Only the architecture lives here: classes come from the dataset and the
 # input size is chosen when training. Any key can also be passed as an argument, which wins over this file:
-#   RPOD('rpod.yaml', backbone='hgnetv2-b4', neck_size='l', small_objects=True, decoder_layers=4)
+#   RPOD('rpod.yaml', backbone='hgnetv2-b4', neck_size='l', decoder_layers=4)
 
 # The part of the model that looks at the image and extracts its features. It is the heaviest part: a
 # bigger one tells hard textures and look-alike classes apart better, but it is slower and needs more
@@ -17,12 +17,6 @@ neck:
   # sizes or the background is complex. s is faster; l is more precise.
   #   choices: s | m | l
   size: m
-
-  # Adds a grid twice as fine (each cell covers 4 × 4 pixels instead of 8 × 8). Turn it on only if the
-  # smallest objects you need to detect are under about 8 pixels at the training size. Before turning it
-  # on, try a larger input size or cropping the region of interest: it often works as well or better.
-  # Roughly doubles the compute.
-  small_objects: false
 
 # Decoder: refines every detection, layer by layer.
 decoder:

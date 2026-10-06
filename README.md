@@ -13,7 +13,7 @@ pip install -e .            # add [dev] for tests, ONNX checks and the pycocotoo
 
 ## Create a model
 
-The model YAML only describes the architecture: four knobs, each explained in `rpod/cfg/models/rpod.yaml` and
+The model YAML only describes the architecture: three knobs, each explained in `rpod/cfg/models/rpod.yaml` and
 `docs/MODEL_CONFIG.md`. Classes come from the dataset and the input size is chosen when training.
 Arguments win over the YAML.
 
@@ -21,7 +21,7 @@ Arguments win over the YAML.
 from rpod import RPOD
 
 model = RPOD()                                   # defaults: hgnetv2-b2, neck m, 3 decoder layers
-model = RPOD('rpod.yaml', backbone='hgnetv2-b4', neck_size='l', small_objects=True, decoder_layers=4)
+model = RPOD('rpod.yaml', backbone='hgnetv2-b4', neck_size='l', decoder_layers=4)
 model.info(imgsz=640)                            # parameters per block and GFLOPs
 ```
 
@@ -29,7 +29,6 @@ model.info(imgsz=640)                            # parameters per block and GFLO
 |---|---|---|
 | `backbone` | `hgnetv2-b0` · `hgnetv2-b2` · `hgnetv2-b4` · `hgnetv2-b5` · `resnet18` | `hgnetv2-b2` |
 | `neck_size` | `s` · `m` · `l` | `m` |
-| `small_objects` | `True` · `False` | `False` |
 | `decoder_layers` | 3 – 6 | 3 |
 
 ## Train
@@ -56,18 +55,13 @@ Why these values: on a real dataset (77 training images), a backbone learning ra
 1e-5 gave +0.12 mAP50-95 on validation, and batch 4 instead of 8 another +0.06 (confirmed with three seeds).
 Removing the flat phase, gradient clipping 10, weight decay 1e-3 and 300 epochs did not help.
 
-Two optional training modes, off by default:
+Optional multi-scale training, off by default:
 
 ```python
 model.train('parts.yaml', imgsz=640, multiscale=True)    # every batch at a random size from 0.75x to 1.25x imgsz
-model.train('parts.yaml', imgsz=640, focus_small=True)   # priority for small objects (< 32x32 at the model input)
 ```
 
-`multiscale`: each image is letterboxed from the original at the batch's size; the last epochs and validation stay at
-`imgsz`. `focus_small`: small objects weigh up to 3x in the loss (also in the query selection), 30 % of the decoder's
-candidates are reserved for the finest level (kept in the model and in the export), and the best epoch and the
-recommended threshold are chosen for small objects (fitness 0.25 mAP50-95 + 0.25 mAP small + 0.5 recall of small
-objects; threshold by F1 with small objects counted twice).
+Each image is letterboxed from the original at the batch's size; the last epochs and validation stay at `imgsz`.
 
 The input needs at least as many candidate positions as the decoder keeps (300): 128×128 or larger.
 

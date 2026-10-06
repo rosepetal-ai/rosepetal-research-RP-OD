@@ -1,7 +1,7 @@
 """Neck (hybrid encoder): input projection -> global attention on the coarsest level -> FPN + PAN fusion.
 
-Modules are keyed by feature level ('p3', 'p4', ...), not by position, so the same names mean the same thing with or
-without level 2: weights of a model built with small objects load into one built without, and the other way round.
+Modules are keyed by feature level ('p3', 'p4', 'p5'), so every neck size shares the same names and a pretrained
+model loads into any of them.
 """
 import torch
 import torch.nn as nn
