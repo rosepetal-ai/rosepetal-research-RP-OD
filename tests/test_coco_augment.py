@@ -24,6 +24,7 @@ def scene():
 
 def test_geometric_augmentations_keep_boxes_on_their_objects():
     A.P_PHOTOMETRIC = 0.0                                   # colors must stay exact to find the objects again
+    A.P_MOSAIC = 0.0                                        # mosaic has its own test
     seen = set()
     for i in range(300):
         out = A.augment(scene(), SimpleNamespace(epoch=0, epochs=10, rng=np.random.default_rng(i)))
@@ -45,6 +46,7 @@ def test_photometric_changes_colors_not_geometry():
 
 
 def test_last_epochs_are_clean():
+    A.P_MOSAIC = 0.0
     s = scene()
     for epoch, epochs in ((96, 100), (99, 100), (69, 72), (5, 6)):           # last 4 %, at least one epoch
         assert A.augment(s, SimpleNamespace(epoch=epoch, epochs=epochs, rng=np.random.default_rng(0))) is s
