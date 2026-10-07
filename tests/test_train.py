@@ -116,3 +116,18 @@ def test_multiscale_training_runs(tmp_path, monkeypatch, capsys):
     assert 'multi-scale: 3 sizes from 128x128 to 192x192, the last 1 epoch(s) at 160x160' in out
     assert yaml.safe_load(open(res['dir'] / 'args.yaml'))['multiscale'] is True
     assert m.imgsz == [160, 160] and len(list(csv.DictReader(open(res['dir'] / 'results.csv')))) == 3
+
+
+def test_open_file_limit_is_raised_for_dataloader_workers():
+    """Workers pass each tensor as an open file: a limit of 1024 broke a COCO validation with 16 workers."""
+    resource = pytest.importorskip('resource')
+    from rpod.engine.trainer import _raise_open_file_limit
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if hard != resource.RLIM_INFINITY and hard < 4096:
+        pytest.skip('hard limit too low to test')
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (1024, hard))
+        _raise_open_file_limit()
+        assert resource.getrlimit(resource.RLIMIT_NOFILE)[0] == (65536 if hard == resource.RLIM_INFINITY else min(65536, hard))
+    finally:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))

@@ -141,6 +141,20 @@ def _to_float(out):
     return out
 
 
+def _raise_open_file_limit(target=65536):
+    """DataLoader workers hand every tensor to the main process as an open file: with many workers and many objects
+    per batch, a limit of 1024 open files (common in containers) runs out ('received 0 items of ancdata'). Raise the
+    soft limit towards the hard one; nothing happens where that is not possible."""
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = target if hard == resource.RLIM_INFINITY else min(target, hard)
+        if soft != resource.RLIM_INFINITY and soft < want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+    except (ImportError, ValueError, OSError):
+        pass
+
+
 def _micro_batch(net, criterion, batch, imgsz, device, amp_dtype, max_objects):
     """Largest divisor of `batch` whose forward + backward fits in GPU memory. The weights are left untouched."""
     if device.type != 'cuda':
@@ -205,6 +219,8 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     random.seed(r['seed'])
     device = torch.device(device)
     workers = int(os.environ.get('RPOD_WORKERS', min(8, os.cpu_count() or 1))) if workers is None else workers
+    if workers > 0:
+        _raise_open_file_limit()
 
     # ---- data
     ds = check_dataset(data)
