@@ -5,6 +5,8 @@ Runs next to the training (same machine), rewrites the page every minute; the pa
 Served by Jupyter at  http://localhost:8890/files/dashboard/index.html?token=<token>  (through the SSH tunnel).
 
     python dashboard.py --run max_b2                          # --reference <run> adds another run's curve
+    python dashboard.py --run arch_control,arch_A,arch_AC     # a series run one after another: the page follows the
+                                                              # one in progress and compares the curves of all
 """
 import argparse
 import csv
@@ -20,7 +22,7 @@ from zoneinfo import ZoneInfo
 import yaml
 
 TZ = ZoneInfo('Europe/Madrid')
-REFERENCES = [('RT-DETR-R18', 46.5), ('D-FINE-M', 52.3)]                     # official COCO val2017 AP, as published   # official COCO val2017 AP, as published
+REFERENCES = [('RT-DETR-R18', 46.5), ('D-FINE-S', 48.5), ('D-FINE-M', 52.3)]   # official COCO val2017 AP, as published
 PROGRESS = re.compile(r'^\s+epoch (\d+)/(\d+) \[.*\]\s+(\d+)% · (\d+)/(\d+) steps · loss ([\d.]+) · (\d+) img/s · ~(\d+) min left')
 
 
@@ -50,13 +52,24 @@ def state(work, run, reference):
         what, _, js = line.partition(' | ')
         if f'runs/train/{run}/' in what:
             try:
-                official.append({'options': what.split('best.pt')[-1].strip() or 'as trained', **json.loads(js)})
+                official.append({'run': run, 'options': what.split('best.pt')[-1].strip() or 'as trained', **json.loads(js)})
             except json.JSONDecodeError:
                 pass
-    alive = running(work / 'logs' / f'{run}.pid')
+    f = work / 'logs/pilots.txt'                       # run_arch.sh / run_pilot.sh: "<run> · <n> layers | {json}"
+    for line in (f.read_text().splitlines() if f.exists() else []):
+        what, _, js = line.partition(' | ')
+        if what.startswith(f'{run} · '):
+            try:
+                official.append({'run': run, 'options': what.split(' · ', 1)[1], **json.loads(js)})
+            except json.JSONDecodeError:
+                pass
+    log_file = work / 'logs' / f'{run}.log'
+    fresh = log_file.exists() and time.time() - log_file.stat().st_mtime < 600     # runs without a pid file
+    alive = running(work / 'logs' / f'{run}.pid') or fresh
     done = len(rows)
-    status = ('finished' if any('all done' in l for l in log[-5:]) else 'evaluating' if alive and total and done >= total
-              else 'training' if alive else 'stopped')
+    finished = any('all done' in l or (l.startswith('===') and l.endswith(' done')) for l in log[-5:])
+    status = ('finished' if finished else 'evaluating' if alive and total and done >= total
+              else 'training' if alive else 'waiting' if not log else 'stopped')
     now = datetime.now(TZ)
     eta = None
     in_epoch = progress and int(progress.group(1)) == done + 1
@@ -87,15 +100,19 @@ def describe(a):
     return ' · '.join(parts)
 
 
-def page(s):
+def page(s, series=()):
+    """s: the run the page follows. series: every run of a series, whose mAP50-95 curves are drawn together."""
     rows, total, done = s['rows'], s['total'] or 0, s['done']
     best = max(rows, key=lambda r: float(r['map50_95']), default=None)
     prog = s['progress']
     cur_pct = int(prog[2]) if prog and int(prog[0]) == done + 1 else (100 if s['status'] != 'training' else 0)
     overall = 100 * (done + cur_pct / 100) / total if total else 0
-    status_cls = {'training': 'good', 'evaluating': 'good', 'finished': 'good', 'stopped': 'critical'}[s['status']]
-    status_txt = {'training': 'Training', 'evaluating': 'Official evaluation', 'finished': 'Finished',
-                  'stopped': 'Stopped — resume with: bash /work/run_max_b2.sh resume'}[s['status']]
+    status_cls = {'training': 'good', 'evaluating': 'good', 'finished': 'good', 'waiting': 'good',
+                  'stopped': 'critical'}[s['status']]
+    status_txt = {'training': 'Training', 'evaluating': 'Official evaluation', 'finished': 'Finished', 'waiting': 'Waiting',
+                  'stopped': 'Stopped (no log line for 10 min)'}[s['status']]
+    if series:
+        status_txt += ' · series: ' + ' → '.join(f"{x['run']} ({x['status']})" for x in series)
     eta = s['eta'].strftime('%a %d %b, %H:%M') if s['eta'] else '—'
     data = {
         'map': [{'name': 'val mAP50-95', 'slot': 1, 'points': [[int(r['epoch']), 100 * float(r['map50_95'])] for r in rows], 'label': True},
@@ -108,7 +125,7 @@ def page(s):
                   if s['ref'] and rows else []),          # only next to real data, never alone
         'loss': [{'name': 'train loss', 'slot': 1, 'points': [[int(r['epoch']), float(r['loss'])] for r in rows], 'label': True}],
         'lr': [{'name': 'learning rate (×1e-4)', 'slot': 1, 'points': [[int(r['epoch']), 1e4 * float(r['lr'])] for r in rows], 'label': True}],
-        'refs': [{'label': f'{n} {v}', 'y': v} for n, v in REFERENCES],
+        'refs': [] if series else [{'label': f'{n} {v}', 'y': v} for n, v in REFERENCES],
         'total': total,
     }
     epoch_rows = ''.join(
@@ -116,9 +133,14 @@ def page(s):
         f"<td><b>{100 * float(r['map50_95']):.1f}</b></td><td>{100 * float(r['map50']):.1f}</td><td>{float(r['precision']):.3f}</td>"
         f"<td>{float(r['recall']):.3f}</td><td>{float(r['mean_iou']):.3f}</td><td>{float(r['fp_per_image']):.2f}</td>"
         f"<td>{float(r['seconds']) / 60:.0f}</td></tr>" for r in reversed(rows))
+    if series:                  # one mAP50-95 curve per run of the series
+        data['map'] = [{'name': x['run'], 'slot': i % 4 + 1, 'label': True,
+                        'points': [[int(r['epoch']), 100 * float(r['map50_95'])] for r in x['rows']]}
+                       for i, x in enumerate(series)]
     official_rows = ''.join(
-        f"<tr><td>{html.escape(o['model'])}</td><td>{o['params_M']}</td><td><b>{o['AP']}</b></td><td>{o['AP50']}</td>"
-        f"<td>{o['AP75']}</td><td>{o['APs']}</td><td>{o['APm']}</td><td>{o['APl']}</td></tr>" for o in s['official'])
+        f"<tr><td>{html.escape(o['run'] + ' · ' + o['options'] if series else o['model'])}</td><td>{o['params_M']}</td>"
+        f"<td><b>{o['AP']}</b></td><td>{o['AP50']}</td><td>{o['AP75']}</td><td>{o['APs']}</td><td>{o['APm']}</td>"
+        f"<td>{o['APl']}</td></tr>" for o in ([o for x in series for o in x['official']] if series else s['official']))
     tile_progress = (f"<div class='value'>{cur_pct}%</div><div class='meter'><span style='width:{cur_pct}%'></span></div>"
                      f"<div class='sub'>{prog[3]}/{prog[4]} steps · {prog[6]} img/s · ~{prog[7]} min left</div>"
                      if prog and s['status'] == 'training' and int(prog[0]) == done + 1 else
@@ -273,7 +295,7 @@ chart('lr', D.lr, {{title: 'Learning rate per epoch', fmt: v => v.toFixed(2), w:
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
-    p.add_argument('--run', default='max_b2')
+    p.add_argument('--run', default='max_b2', help='a run, or several separated by commas (a series)')
     p.add_argument('--reference', default=None, help='another run whose mAP50-95 curve is drawn for comparison')
     p.add_argument('--work', default='/work')
     p.add_argument('--out', default='/work/dashboard/index.html')
@@ -284,7 +306,10 @@ if __name__ == '__main__':
     out.parent.mkdir(parents=True, exist_ok=True)
     while True:
         tmp = out.with_suffix('.tmp')
-        tmp.write_text(page(state(Path(a.work), a.run, a.reference)))
+        states = [state(Path(a.work), r, a.reference) for r in a.run.split(',')]
+        current = (next((x for x in states if x['status'] in ('training', 'evaluating')), None)
+                   or next((x for x in reversed(states) if x['rows']), states[0]))
+        tmp.write_text(page(current, states if len(states) > 1 else ()))
         os.replace(tmp, out)
         if a.once:
             break

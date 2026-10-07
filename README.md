@@ -2,6 +2,8 @@
 
 Real-time object detection for industrial vision. A dense, YOLO-like head proposes candidates and a DETR-style
 decoder refines their boxes and removes duplicates, so there is no NMS. Architecture: `docs/architecture.svg`.
+Boxes are refined as in D-FINE: each edge is a probability distribution that every decoder layer sharpens, and the
+last layer teaches the earlier ones; the losses follow D-FINE and DEIM (`rpod/nn/decoder.py`, `rpod/loss/criterion.py`).
 
 Everything is used from Python through one object, `RPOD`.
 
@@ -48,6 +50,7 @@ fixed (RT-DETR / D-FINE / DEIM practice, adjusted with experiments on a real dat
 | Optimizer | AdamW, lr 1e-4 for the whole network including the backbone, weight decay 1e-4 (none on norms, biases, embeddings) |
 | Schedule | warmup, flat, cosine decay over the last 20 % of the epochs; `patience` epochs without improvement start that decay early |
 | Stability | EMA of the weights (what is validated and saved), gradient clipping 0.1, mixed precision on GPU, no dropout |
+| Losses | classification MAL (DEIM); boxes L1 + GIoU, edge distributions FGL + self-distillation DDF (D-FINE), on the union of the matches of all layers; on every decoder layer, the denoising queries and the dense head (every position, not only the selected ones) |
 | Batch | `batch` is the effective batch, 4 by default: if it does not fit in the GPU it is split into accumulation steps, shown in the log; backbone BatchNorm is frozen below 8 images per step |
 | Best epoch | highest 0.5 · mAP50-95 + 0.5 · recall (IoU ≥ 0.5, at the best-F1 threshold) |
 
@@ -73,6 +76,7 @@ val/   test/      metrics.json, pr_curves.png, confusion_matrix.png, predictions
 ```
 
 `best.pt` stores the recommended threshold (best mean F1 on val), used by default by `predict`, `val` and `export`.
+Checkpoints from RP-OD up to `ba7e126`, before the box head became edge distributions, need that version.
 The test split, if there is one, is evaluated once at the end with that threshold and never used for a decision.
 
 ## Validate

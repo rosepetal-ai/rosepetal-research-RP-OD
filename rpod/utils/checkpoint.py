@@ -13,7 +13,7 @@ import torch
 
 from ..cfg.schema import derive, from_dict, to_dict
 
-FORMAT = 1
+FORMAT = 2     # 2: boxes as edge distributions (D-FINE); 1: RP-OD <= ba7e126
 
 
 def save_checkpoint(path, net, cfg, names, imgsz, num_queries, threshold=None, metrics=None, extra=None):
@@ -30,7 +30,9 @@ def save_checkpoint(path, net, cfg, names, imgsz, num_queries, threshold=None, m
 def load_checkpoint(path):
     ckpt = torch.load(path, map_location='cpu', weights_only=True)
     if ckpt.get('rpod_format') != FORMAT:
-        raise ValueError(f'{path} is not an RP-OD checkpoint (or comes from an incompatible version)')
+        raise ValueError(f'{path} is not an RP-OD checkpoint (or comes from an incompatible version'
+                         + (': format 1, trained before the box head became edge distributions; use RP-OD <= ba7e126)'
+                            if ckpt.get('rpod_format') == 1 else ')'))
     ckpt['config'] = from_dict(ckpt['config'])
     ckpt['names'] = {int(k): v for k, v in ckpt['names'].items()}
     return ckpt

@@ -34,7 +34,7 @@ RECIPE = dict(lr=1e-4, backbone_lr=1e-4, weight_decay=1e-4, betas=(0.9, 0.999), 
               final_fraction=0.2, final_lr_ratio=0.05, ema_decay=0.9999, ema_tau=2000, clip_grad=0.1,
               freeze_backbone_bn_below=8, clean_fraction=0.04, seed=0)
 PROGRESS_SECONDS = 120      # one progress line this often inside an epoch (none in epochs shorter than this)
-CSV_FIELDS = ['epoch', 'phase', 'lr', 'loss', 'vfl', 'bbox', 'giou', 'map50_95', 'map50', 'map_small', 'map_medium',
+CSV_FIELDS = ['epoch', 'phase', 'lr', 'loss', 'cls', 'bbox', 'giou', 'map50_95', 'map50', 'map_small', 'map_medium',
               'map_large', 'precision', 'recall', 'f1',
               'threshold', 'mean_iou', 'fp_per_image', 'fitness', 'best', 'seconds']
 
@@ -56,11 +56,11 @@ class ModelEMA:
     def update(self, model):
         self.updates += 1
         d = self.decay * (1 - math.exp(-self.updates / self.tau))
-        src = model.state_dict()
-        for k, v in self.ema.state_dict().items():
-            if v.dtype.is_floating_point:
-                v.mul_(d).add_(src[k].detach(), alpha=1 - d)
-            else:
+        src, own = model.state_dict(), self.ema.state_dict()
+        floats = [k for k, v in own.items() if v.dtype.is_floating_point]
+        torch._foreach_lerp_([own[k] for k in floats], [src[k].detach() for k in floats], 1 - d)   # one call for all
+        for k, v in own.items():
+            if not v.dtype.is_floating_point:
                 v.copy_(src[k])
 
 
@@ -132,12 +132,13 @@ def _autocast(device, dtype):
 
 def _to_float(out):
     """Losses are computed in float32 whatever the precision of the forward pass."""
-    conv = lambda d: {k: (v.float() if torch.is_tensor(v) and v.is_floating_point() else v) for k, v in d.items()}
-    res = conv(out)
-    for key in ('aux_outputs', 'enc_aux_outputs', 'dn_aux_outputs'):
-        if key in out:
-            res[key] = [conv(a) for a in out[key]]
-    return res
+    if torch.is_tensor(out):
+        return out.float() if out.is_floating_point() else out
+    if isinstance(out, dict):
+        return {k: _to_float(v) for k, v in out.items()}
+    if isinstance(out, list):
+        return [_to_float(v) for v in out]
+    return out
 
 
 def _micro_batch(net, criterion, batch, imgsz, device, amp_dtype, max_objects):
@@ -316,15 +317,16 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                 if not group:
                     break
                 total_boxes = sum(len(t['labels']) for _, targets, _ in group for t in targets)
+                total_images = sum(len(images) for images, _, _ in group)
                 for images, targets, _ in group:
                     images = images.to(device, non_blocking=True)
-                    targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+                    targets = [{k: v.to(device, non_blocking=True) for k, v in t.items()} for t in targets]
                     with _autocast(device, amp_dtype):
                         out = net(images, targets)
-                    losses = criterion(_to_float(out), targets, num_boxes=total_boxes)
+                    losses = criterion(_to_float(out), targets, num_boxes=total_boxes, num_images=total_images)
                     scaler.scale(losses['loss']).backward()
-                    for k in ('loss', 'vfl', 'bbox', 'giou'):
-                        sums[k] = sums.get(k, 0.0) + float(losses[k].detach())
+                    for k in ('loss', 'cls', 'bbox', 'giou'):   # on the device: read only for the log
+                        sums[k] = sums.get(k, 0.0) + losses[k].detach()
                     count += 1
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(params, r['clip_grad'])
@@ -332,14 +334,14 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 ema.update(net)
-                seen += sum(len(images) for images, _, _ in group)
+                seen += total_images
                 if time.time() >= next_report:
                     next_report = time.time() + PROGRESS_SECONDS
-                    log(_progress(epoch, schedule.end, step + 1, steps_per_epoch, sums['loss'] * accumulate / count,
+                    log(_progress(epoch, schedule.end, step + 1, steps_per_epoch, float(sums['loss']) * accumulate / count,
                                   seen, time.time() - t0))
-            means = {k: v * accumulate / max(count, 1) for k, v in sums.items()}   # per effective batch
+            means = {k: float(v) * accumulate / max(count, 1) for k, v in sums.items()}   # per effective batch
 
-            metrics = validate(ema.ema, val_set, names, device, micro, amp_dtype=amp_dtype)
+            metrics = validate(ema.ema, val_set, names, device, micro, workers=workers, amp_dtype=amp_dtype)
             phase = schedule.phase(epoch)
             improved = metrics.fitness > best_fitness
             if improved:
@@ -357,7 +359,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                              'seconds': round(seconds, 1)})
             csv_file.flush()
             log(f"\nepoch {epoch + 1}/{schedule.end} [{phase}]  lr {factor * r['lr']:.2e}  loss {means.get('loss', 0):.3f} "
-                f"(vfl {means.get('vfl', 0):.3f} l1 {means.get('bbox', 0):.3f} giou {means.get('giou', 0):.3f})  {seconds:.0f}s")
+                f"(cls {means.get('cls', 0):.3f} l1 {means.get('bbox', 0):.3f} giou {means.get('giou', 0):.3f})  {seconds:.0f}s")
             log(f"val  mAP50-95 {metrics.map50_95:.3f}  mAP50 {metrics.map50:.3f}  P {metrics.precision:.3f}  "
                 f"R {metrics.recall:.3f}  F1 {metrics.f1:.3f} @ {metrics.threshold:.3f}  IoU {metrics.mean_iou:.3f}  "
                 f"FP/img {metrics.fp_per_image:.2f}  fitness {metrics.fitness:.4f}" + ('  * best' if improved else '')
@@ -387,12 +389,13 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     net.to(device).eval()
     threshold = best['threshold']
     log(f'\nbest epoch {best_epoch + 1} (fitness {best_fitness:.4f}), recommended threshold {threshold:.3f}')
-    val_metrics = validate(net, val_set, names, device, micro, threshold=threshold, plots_dir=run / 'val', amp_dtype=amp_dtype)
+    val_metrics = validate(net, val_set, names, device, micro, threshold=threshold, plots_dir=run / 'val', workers=workers,
+                           amp_dtype=amp_dtype)
     test_metrics = None
     if ds['records'].get('test'):
         test_set = DetectionDataset(ds['records']['test'], imgsz, len(names))
         test_metrics = validate(net, test_set, names, device, micro, threshold=threshold, plots_dir=run / 'test',
-                                amp_dtype=amp_dtype)
+                                workers=workers, amp_dtype=amp_dtype)
         log(f'\ntest (never used for any decision), threshold {threshold:.3f}')
         log(test_metrics.table(names))
     model._adopt(net.eval(), names, imgsz, threshold, num_queries, run / 'weights' / 'best.pt', args['data'])

@@ -27,9 +27,10 @@ def validate(net, dataset, names, device, batch=16, threshold=None, plots_dir=No
         amp = torch.autocast(str(device).split(':')[0], dtype=amp_dtype) if amp_dtype else contextlib.nullcontext()
         with amp:
             out = net(images.to(device, non_blocking=True))
+        # one copy per batch; the per-image work runs on the CPU (on the GPU every image would wait for it)
+        logits, boxes = out['pred_logits'].float().cpu(), out['pred_boxes'].float().cpu()
         for j, meta in enumerate(metas):
-            xyxy, scores, cls = postprocess(out['pred_logits'][j].float(), out['pred_boxes'][j].float(), meta['geom'],
-                                            meta['orig_shape'], dataset.imgsz, 0.0, 100)
+            xyxy, scores, cls = postprocess(logits[j], boxes[j], meta['geom'], meta['orig_shape'], dataset.imgsz, 0.0, 100)
             pred = (xyxy.cpu().numpy(), scores.cpu().numpy(), cls.cpu().numpy())
             gt = dataset.ground_truth(meta['index'])
             preds.append(pred)

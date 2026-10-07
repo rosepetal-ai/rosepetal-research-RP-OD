@@ -1,9 +1,15 @@
 """Query selection (the dense 'YOLO' head) + deformable decoder (the 'DETR' refiner).
 
+Boxes are refined as in D-FINE (Fine-grained Distribution Refinement): after the first decoder layer gives an initial
+box, every layer predicts, for each of its four edges, a probability distribution over REG_MAX + 1 positions (bins
+dense near the initial edge, sparse far from it) and adds it to the previous layer's distribution, in logit space; the
+edge is the expected position. Each layer is a complete detector, so a decoder cut to its first N layers is exact.
+
 In:  the neck maps, finest first (e.g. [P3, P4, P5]).
 Out (eval):  pred_logits [B, K, C], pred_boxes [B, K, 4] (cxcywh, normalized).
-Out (train): the same plus aux_outputs (every decoder layer), enc_aux_outputs (top-K proposals)
-             and dn_aux_outputs / dn_meta (denoising queries).
+Out (train): the same plus pred_corners / ref_points (the edge distributions and the initial boxes they refine),
+             aux_outputs (every decoder layer, with the last layer's distributions as teacher), pre_outputs (the
+             initial boxes), enc_aux_outputs (the dense head on every token) and dn_* (denoising queries).
 """
 import math
 
@@ -14,9 +20,38 @@ from ..utils.boxes import cxcywh_to_xyxy, inverse_sigmoid, xyxy_to_cxcywh
 from .deform_attn import MSDeformableAttention
 from .ops import contiguous_grad
 
+REG_MAX, REG_SCALE, UP = 32, 4.0, 0.5     # D-FINE: 33 bins per edge; edges move up to 2 x the initial box size
+
 
 def bias_init_with_prob(p=0.01):
     return -math.log((1 - p) / p)
+
+
+def bin_positions(reg_max=REG_MAX, up=UP, reg_scale=REG_SCALE):
+    """D-FINE's W(n): where each bin puts the edge, in units of the initial box size / reg_scale from its initial
+    place (shifted by reg_scale / 2). Symmetric, dense near 0 for fine corrections, sparse towards +-2 * up * reg_scale."""
+    step = (up * reg_scale + 1) ** (2 / (reg_max - 2))
+    left = [1 - step ** i for i in range(reg_max // 2 - 1, 0, -1)]
+    right = [step ** i - 1 for i in range(1, reg_max // 2)]
+    return torch.tensor([-2 * up * reg_scale, *left, 0.0, *right, 2 * up * reg_scale])
+
+
+def distance_to_box(ref, dist, reg_scale=REG_SCALE):
+    """Initial boxes ref (cxcywh) + edge distances dist (left, top, right, bottom; units as in bin_positions) -> cxcywh."""
+    cx, cy, w, h = ref.unbind(-1)
+    x0 = cx - (0.5 * reg_scale + dist[..., 0]) * w / reg_scale
+    y0 = cy - (0.5 * reg_scale + dist[..., 1]) * h / reg_scale
+    x1 = cx + (0.5 * reg_scale + dist[..., 2]) * w / reg_scale
+    y1 = cy + (0.5 * reg_scale + dist[..., 3]) * h / reg_scale
+    return xyxy_to_cxcywh(torch.stack([x0, y0, x1, y1], -1))
+
+
+def box_to_distance(ref, xyxy, reg_scale=REG_SCALE):
+    """Inverse of distance_to_box: the edge distances that turn ref (cxcywh) into the boxes xyxy, [N, 4]."""
+    cx, cy, w, h = ref.unbind(-1)
+    sx, sy = w / reg_scale + 1e-16, h / reg_scale + 1e-16
+    return torch.stack([(cx - xyxy[:, 0]) / sx, (cy - xyxy[:, 1]) / sy,
+                        (xyxy[:, 2] - cx) / sx, (xyxy[:, 3] - cy) / sy], -1) - 0.5 * reg_scale
 
 
 class MLP(nn.Module):
@@ -82,9 +117,8 @@ def build_denoising_group(targets, num_classes, num_queries, class_embed, num_de
     negative = torch.zeros([bs, 2 * max_gt, 1], device=device)
     negative[:, max_gt:] = 1
     negative = negative.tile(1, num_group, 1)
-    positive = (1 - negative.squeeze(-1)) * pad
-    dn_positive_idx = torch.nonzero(positive)[:, 1]
-    dn_positive_idx = torch.split(dn_positive_idx, [n * num_group for n in num_gts])
+    # positive copies: the first n slots of every group of 2 * max_gt, on the CPU (no waiting for the GPU)
+    dn_positive_idx = [torch.cat([torch.arange(n) + 2 * max_gt * g for g in range(num_group)]) for n in num_gts]
     num_dn = int(max_gt * 2 * num_group)
 
     if label_noise_ratio > 0:
@@ -129,7 +163,9 @@ class Decoder(nn.Module):
         self.query_pos_head = MLP(4, 2 * d, d, 2)
         self.layers = nn.ModuleList(DecoderLayer(d, n_heads, dim_ff, n_levels, n_points, dropout) for _ in range(num_layers))
         self.dec_score_head = nn.ModuleList(nn.Linear(d, num_classes) for _ in range(num_layers))
-        self.dec_bbox_head = nn.ModuleList(MLP(d, d, 4, 3) for _ in range(num_layers))
+        self.pre_bbox_head = MLP(d, d, 4, 3)                    # the initial box, after the first layer
+        self.dec_bbox_head = nn.ModuleList(MLP(d, d, 4 * (REG_MAX + 1), 3) for _ in range(num_layers))  # edge logits
+        self.register_buffer('bins', bin_positions(), persistent=False)
         # denoising label embedding (index num_classes = padding)
         self.denoising_class_embed = nn.Embedding(num_classes + 1, d, padding_idx=num_classes)
         self._reset_parameters()
@@ -139,7 +175,7 @@ class Decoder(nn.Module):
         nn.init.constant_(self.enc_score_head.bias, b)
         for head in self.dec_score_head:
             nn.init.constant_(head.bias, b)
-        for mlp in [self.enc_bbox_head, *self.dec_bbox_head]:
+        for mlp in [self.enc_bbox_head, self.pre_bbox_head, *self.dec_bbox_head]:
             nn.init.zeros_(mlp.layers[-1].weight)
             nn.init.zeros_(mlp.layers[-1].bias)
         nn.init.xavier_uniform_(self.enc_output[0].weight)
@@ -178,8 +214,6 @@ class Decoder(nn.Module):
         enc_box_unact = self.enc_bbox_head(out_memory) + anchors
         topk = enc_logits.max(-1).values.topk(self.num_queries, dim=1).indices  # [B, K]
         ref_unact = enc_box_unact.gather(1, topk[..., None].expand(-1, -1, 4))
-        enc_topk_logits = enc_logits.gather(1, topk[..., None].expand(-1, -1, self.num_classes))
-        enc_topk_boxes = ref_unact.sigmoid()
         tgt = out_memory.gather(1, topk[..., None].expand(-1, -1, out_memory.shape[-1])).detach()
         ref_unact = ref_unact.detach()
         if dn_embed is not None:
@@ -187,37 +221,63 @@ class Decoder(nn.Module):
             ref_unact = torch.cat([dn_box_unact, ref_unact], 1)
 
         # ---- decoder: refine the boxes layer by layer
-        ref = ref_unact.sigmoid()
-        ref_detach = ref
-        out_boxes, out_logits = [], []
+        ref_detach = ref_unact.sigmoid()
+        tgt_detach = corners = 0
+        out_boxes, out_logits, out_corners = [], [], []
         n_layers = self.num_layers
         for i in range(n_layers):
-            query_pos = self.query_pos_head(ref_detach)
+            query_pos = self.query_pos_head(ref_detach).clamp(-10, 10)
             tgt = self.layers[i](tgt, ref_detach, memory, spatial_shapes, attn_mask, query_pos)
-            delta = self.dec_bbox_head[i](tgt)
-            new_ref = (delta + inverse_sigmoid(ref_detach)).sigmoid()
-            if self.training:
-                # the box loss of layer i also reaches layer i-1 through the (undetached) previous box
-                boxes_i = new_ref if i == 0 else (delta + inverse_sigmoid(ref)).sigmoid()
-                out_boxes.append(boxes_i)
+            if i == 0:
+                pre_boxes = (self.pre_bbox_head(tgt) + inverse_sigmoid(ref_detach)).sigmoid()
+                initial = pre_boxes.detach()
+            # this layer's edge logits add to the previous layer's (undetached: its loss also trains earlier layers);
+            # float32, so the edge positions keep their precision under bfloat16
+            corners = self.dec_bbox_head[i](tgt + tgt_detach).float() + corners
+            boxes = distance_to_box(initial, self._expected_distance(corners))
+            if self.training or i == n_layers - 1:
+                out_boxes.append(boxes)
                 out_logits.append(self.dec_score_head[i](tgt))
-            elif i == n_layers - 1:
-                out_boxes.append(new_ref)
-                out_logits.append(self.dec_score_head[i](tgt))
-            ref = new_ref
-            ref_detach = new_ref.detach()
+                out_corners.append(corners)
+            ref_detach, tgt_detach = boxes.detach(), tgt.detach()
 
         out_boxes, out_logits = torch.stack(out_boxes), torch.stack(out_logits)  # [L, B, n_dn + K, ...]
         if not self.training:
             return {'pred_logits': out_logits[-1], 'pred_boxes': out_boxes[-1]}
 
+        out_corners = torch.stack(out_corners)
+        pre_logits = out_logits[0]                       # the first layer's scores go with the initial boxes
         if dn_meta is not None:
-            dn_boxes, out_boxes = out_boxes.split(dn_meta['dn_num_split'], dim=2)
-            dn_logits, out_logits = out_logits.split(dn_meta['dn_num_split'], dim=2)
-        out = {'pred_logits': out_logits[-1], 'pred_boxes': out_boxes[-1],
-               'aux_outputs': [{'pred_logits': a, 'pred_boxes': b} for a, b in zip(out_logits[:-1], out_boxes[:-1])],
-               'enc_aux_outputs': [{'pred_logits': enc_topk_logits, 'pred_boxes': enc_topk_boxes}]}
+            split = dn_meta['dn_num_split']
+            dn_boxes, out_boxes = out_boxes.split(split, dim=2)
+            dn_logits, out_logits = out_logits.split(split, dim=2)
+            dn_corners, out_corners = out_corners.split(split, dim=2)
+            dn_pre_boxes, pre_boxes = pre_boxes.split(split, dim=1)
+            dn_pre_logits, pre_logits = pre_logits.split(split, dim=1)
+            dn_initial, initial = initial.split(split, dim=1)
+        layers = self._per_layer(out_logits, out_boxes, out_corners, initial)
+        out = {**layers[-1], 'aux_outputs': layers[:-1],
+               'pre_outputs': {'pred_logits': pre_logits, 'pred_boxes': pre_boxes},
+               # the dense head is supervised on every token, not only the top-K it selected: the token that fits an
+               # object best learns to score high even when it was not selected
+               'enc_aux_outputs': [{'pred_logits': enc_logits, 'pred_boxes': enc_box_unact.sigmoid(), 'valid': valid}]}
         if dn_meta is not None:
-            out['dn_aux_outputs'] = [{'pred_logits': a, 'pred_boxes': b} for a, b in zip(dn_logits, dn_boxes)]
+            out['dn_aux_outputs'] = self._per_layer(dn_logits, dn_boxes, dn_corners, dn_initial)
+            out['dn_pre_outputs'] = {'pred_logits': dn_pre_logits, 'pred_boxes': dn_pre_boxes}
             out['dn_meta'] = dn_meta
         return out
+
+    def _expected_distance(self, corners):
+        """Edge logits [..., 4 * (REG_MAX + 1)] -> expected edge distances [..., 4] (sum of probability x position)."""
+        prob = corners.reshape(*corners.shape[:-1], 4, REG_MAX + 1).softmax(-1)
+        return (prob * self.bins.to(prob.dtype)).sum(-1)
+
+    @staticmethod
+    def _per_layer(logits, boxes, corners, initial):
+        """Every layer's outputs for the losses; all but the last get the last layer's edge logits and scores as their
+        teacher (GO-LSD: the final layer teaches the earlier ones)."""
+        layers = [{'pred_logits': logits[i], 'pred_boxes': boxes[i], 'pred_corners': corners[i], 'ref_points': initial}
+                  for i in range(len(logits))]
+        for layer in layers[:-1]:
+            layer.update(teacher_corners=corners[-1], teacher_logits=logits[-1])
+        return layers

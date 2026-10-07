@@ -35,7 +35,8 @@ def test_param_groups_learning_rates_and_no_decay_on_1d():
 
 
 def test_accumulation_equals_one_big_batch():
-    """Two micro-batches of 1 accumulated, normalized by the objects of both, give the gradient of one batch of 2."""
+    """Two micro-batches of 1 accumulated, normalized by the objects and images of both, give the gradient of one
+    batch of 2. The two images are copies: the GO-LSD terms are normalized by each step's share, exact when alike."""
     net = make_net()
     net.decoder.num_denoising = 0          # denoising noise is random: switch it off to compare exactly
     net.train()
@@ -43,14 +44,13 @@ def test_accumulation_equals_one_big_batch():
         if isinstance(m, torch.nn.BatchNorm2d):
             m.eval()
     crit = SetCriterion(3)
-    x = torch.rand(2, 3, 128, 128)
-    t = [{'labels': torch.tensor([0, 1]), 'boxes': torch.tensor([[.3, .3, .2, .2], [.6, .6, .1, .3]])},
-         {'labels': torch.tensor([2]), 'boxes': torch.tensor([[.5, .5, .4, .2]])}]
+    x = torch.rand(1, 3, 128, 128).repeat(2, 1, 1, 1)
+    t = [{'labels': torch.tensor([0, 1]), 'boxes': torch.tensor([[.3, .3, .2, .2], [.6, .6, .1, .3]])}] * 2
     crit(net(x, t), t)['loss'].backward()
     big = [p.grad.clone() for p in net.parameters() if p.grad is not None]
     net.zero_grad()
     for i in range(2):
-        crit(net(x[i:i + 1], t[i:i + 1]), t[i:i + 1], num_boxes=3)['loss'].backward()
+        crit(net(x[i:i + 1], t[i:i + 1]), t[i:i + 1], num_boxes=4, num_images=2)['loss'].backward()
     small = [p.grad.clone() for p in net.parameters() if p.grad is not None]
     worst = max(float((a - b).abs().max() / (a.abs().max() + 1e-8)) for a, b in zip(big, small))
     assert worst < 1e-3
