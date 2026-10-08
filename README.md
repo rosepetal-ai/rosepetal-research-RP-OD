@@ -61,10 +61,17 @@ Removing the flat phase, gradient clipping 10, weight decay 1e-3 and 300 epochs 
 Optional multi-scale training, off by default:
 
 ```python
-model.train('parts.yaml', imgsz=640, multiscale=True)    # every batch at a random size from 0.75x to 1.25x imgsz
+model.train('parts.yaml', imgsz=640, multiscale=True)    # every batch at a random size, height and width apart
 ```
 
-Each image is letterboxed from the original at the batch's size; the last epochs and validation stay at `imgsz`.
+| Epochs | Height and width of each batch, drawn separately (at imgsz 640) |
+|---|---|
+| first 25 % | 0.5x – 1.5x imgsz (320 – 960): wide range, aspect ratios up to 3:1 |
+| up to 5/6 | 0.75x – 1.25x imgsz (480 – 800) |
+| last sixth | imgsz |
+
+Each image is letterboxed from the original at the batch's size; validation stays at `imgsz`. A batch that does not
+fit in the GPU at its size is split into accumulation steps, so the large sizes cost memory only when they come up.
 
 The input needs at least as many candidate positions as the decoder keeps (300): 128×128 or larger.
 

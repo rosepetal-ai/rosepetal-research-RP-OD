@@ -68,3 +68,16 @@ def test_mosaic_keeps_boxes_on_their_objects():
             inner = out.image[int(np.ceil(y0)) + 1:int(y1) - 1, int(np.ceil(x0)) + 1:int(x1) - 1].reshape(-1, 3)
             if len(inner):
                 assert (np.abs(inner.astype(int) - COLORS[c]).max(1) <= 2).mean() > 0.95   # bilinear resize at edges
+
+
+def test_mosaic_only_in_the_first_quarter():
+    A.P_MOSAIC, A.P_PHOTOMETRIC = 1.0, 0.0
+    calls, original = [], A.mosaic
+    A.mosaic = lambda samples, imgsz, rng: calls.append(1) or samples[0]
+    try:
+        for epoch in range(100):
+            A.augment(scene(), SimpleNamespace(epoch=epoch, epochs=100, rng=np.random.default_rng(epoch), imgsz=[160, 160],
+                                               sample=lambda k: [scene() for _ in range(k)]))
+    finally:
+        A.mosaic, A.P_MOSAIC = original, 0.0
+    assert len(calls) == 25

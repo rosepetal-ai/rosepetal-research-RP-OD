@@ -1,8 +1,10 @@
 """Train RP-OD on COCO 2017 with the protocol of the papers we compare with. Start it detached; it writes
 runs/train/<name>/ (results.csv after every epoch, weights/best.pt and last.pt) under the current directory.
 
-Protocol: 640x640, 300 queries (the library would take 5x the busiest image, 465 on COCO), augment.py (RT-DETR recipe,
-off for the last 4 % of the epochs), the full schedule (patience never brings the final decay forward), the learning
+Protocol: validation at 640x640, 300 queries (the library would take 5x the busiest image, 465 on COCO), augment.py
+(RT-DETR recipe, mosaic in the first quarter of the epochs, off for the last 4 %), multi-scale training (height and
+width drawn separately per batch: 320-960 in the first quarter, 480-800 until the last sixth, then 640), the full
+schedule (patience never brings the final decay forward), the learning
 rate decaying over the second half (--final-fraction 0.5: flat for 80 % of a 72-epoch run left the model on a plateau
 from epoch ~40 with nothing gained in the decay), batch 32 (split into accumulation steps automatically if it does not
 fit). Everything else is the library recipe.
@@ -39,8 +41,11 @@ p.add_argument('--final-fraction', type=float, default=0.5, help='share of the e
 p.add_argument('--backbone', default='hgnetv2-b2')
 p.add_argument('--neck-size', default='l')
 p.add_argument('--decoder-layers', type=int, default=6)
-p.add_argument('--multiscale', type=int, default=0, help='1: train at random sizes from 480 to 800 (last epochs at 640)')
-p.add_argument('--mosaic', type=int, default=1, help='mosaic augmentation with probability 0.5 (0: off)')
+p.add_argument('--multiscale', type=int, default=1,
+               help='height and width drawn separately per batch: 320-960 in the first quarter of the epochs, 480-800 '
+                    'until the last sixth, then 640 (0: always 640)')
+p.add_argument('--mosaic', type=int, default=1,
+               help='mosaic augmentation with probability 0.5 in the first quarter of the epochs (0: off)')
 p.add_argument('--init', default=None, help='checkpoint to start from, any configuration (loads what fits)')
 p.add_argument('--resume', default=None, help='weights/state.pt of an interrupted run: everything else comes from it')
 a = p.parse_args()

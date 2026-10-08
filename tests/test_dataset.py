@@ -150,30 +150,30 @@ def _tag(sample, ctx):
 
 
 
-def test_multiscale_sizes():
-    from rpod.data import multiscale_sizes
-    sq = multiscale_sizes([640, 640])
-    assert sq[0] == [480, 480] and sq[-1] == [800, 800] and [640, 640] in sq and len(sq) == 11
-    wide = multiscale_sizes([640, 1568])
-    assert [640, 1568] in wide and all(h % 32 == 0 and w % 32 == 0 for h, w in wide)
-    assert all(abs(w / h - 1568 / 640) < 0.1 for h, w in wide)                       # aspect ratio kept
+def test_side_choices():
+    from rpod.data import side_choices
+    assert side_choices(640, 0.5, 1.5) == list(range(320, 961, 32))
+    assert side_choices(640, 0.75, 1.25) == list(range(480, 801, 32))
+    assert side_choices(160, 0.5, 1.5, minimum=128) == [128, 160, 192, 224]
 
 
-def test_multiscale_sampler_one_size_per_batch():
+def test_multiscale_sampler_phases_and_one_size_per_batch():
     from rpod.data import MultiScaleBatchSampler
-    sizes = [[96, 96], [128, 128], [160, 160]]
-    s = MultiScaleBatchSampler(10, 3, sizes, [128, 128], seed=0, drop_last=False)
-    seen_sizes = set()
-    for epoch in range(4):
+    s = MultiScaleBatchSampler(40, 4, [640, 640], epochs=12, seed=0)            # phases end at epochs 3 and 10
+    assert [end for end, _, _ in s.phases] == [3, 10] and s.largest() == (960, 960)
+    for epoch, (lo, hi) in ((0, (320, 960)), (2, (320, 960)), (3, (480, 800)), (9, (480, 800))):
         s.epoch = epoch
         batches = list(s)
-        assert sorted(i for b in batches for i, _ in b) == list(range(10))              # every image once per epoch
-        assert all(len({size for _, size in b}) == 1 for b in batches)                  # one size per batch
-        seen_sizes |= {b[0][1] for b in batches}
-        assert batches == list(s)                                                       # same epoch, same batches
-    assert seen_sizes == {(96, 96), (128, 128), (160, 160)}
-    s.fixed = True
-    assert {size for b in s for _, size in b} == {(128, 128)}
+        assert sorted(i for b in batches for i, _ in b) == list(range(40))      # every image once per epoch
+        assert all(len({size for _, size in b}) == 1 for b in batches)          # one size per batch
+        assert all(lo <= h <= hi and lo <= w <= hi and h % 32 == 0 == w % 32 for h, w in {b[0][1] for b in batches})
+        assert batches == list(s)                                               # same epoch, same batches
+    s.epoch = 0
+    assert any(h != w for b in s for _, (h, w) in b)                            # height and width drawn apart
+    s.epoch = 10
+    assert {size for b in s for _, size in b} == {(640, 640)}                   # after the last phase
+    s.epoch, s.fixed = 0, True
+    assert {size for b in s for _, size in b} == {(640, 640)}
 
 
 def test_item_at_another_size_keeps_boxes_on_objects(tmp_path):

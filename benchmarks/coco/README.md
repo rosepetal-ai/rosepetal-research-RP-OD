@@ -12,10 +12,16 @@ through the augment hook.
 | `eval_coco.py` | AP with pycocotools on the official annotations; `--decoder-layers N` keeps the first N layers |
 | `dashboard.py` | Self-refreshing page with the state of a run, or of runs made one after another (`--run a,b,c`): progress, ETA, curves, official numbers; served by Jupyter at `/files/dashboard/index.html` |
 
-Protocol, as the papers we compare with: train2017 → val2017, 640×640, 300 queries, up to 100 detections, AP by
-pycocotools. Differences: letterbox instead of stretching to a square; multi-scale input sizes only with
-`--multiscale 1`. Learning rate flat for the first half and decaying over the second (`--final-fraction 0.5`),
-augmentations and multi-scale off for the last 4 % of the epochs.
+Protocol, as the papers we compare with: train2017 → val2017, evaluated at 640×640, 300 queries, up to 100
+detections, AP by pycocotools. Differences: letterbox instead of stretching to a square. Learning rate flat for the
+first half and decaying over the second (`--final-fraction 0.5`).
+
+| Epochs (of 120) | Input size of each batch (height and width drawn separately) | Mosaic | Other augmentations |
+|---|---|---|---|
+| 1 – 30 | 320 – 960 | 50 % of the images | yes |
+| 31 – 100 | 480 – 800 | no | yes |
+| 101 – 115 | 640 × 640 | no | yes |
+| 116 – 120 | 640 × 640 | no | no (clean images) |
 
 The maximum model of a backbone (neck `l` · 6 decoder layers) is trained once; every smaller configuration with
 that backbone loads all its weights from it (`tests/test_checkpoint_predict_export.py`), and keeping the first N

@@ -7,15 +7,17 @@ from 14.5 to 12.0 while validation dropped from 50.6 to 49.8. It runs on the ori
 changing the image content is what gives scale variety with a fixed input: zooming out makes the objects smaller on the
 canvas, cropping makes them bigger.
 
-Mosaic with probability P_MOSAIC (YOLO, DEIM; train_coco.py --mosaic 0 turns it off): four training images in a 2x2 grid around a random
-centre, on a canvas twice the model input, so objects arrive at about half their size: more small objects and more
-context per image. After a mosaic come the photometric distortion, the IoU crop and the flip, not the zoom-out
-(the objects are already halved). In 6-epoch COCO fine-tunes it was the only change that helped at 640: +0.3 AP,
-+0.4 AP small (the others: multi-scale neutral, a small-object loss weighting worse).
+Mosaic with probability P_MOSAIC (YOLO, DEIM; train_coco.py --mosaic 0 turns it off), only in the first
+MOSAIC_FRACTION of the epochs, the same ones where multi-scale training uses its widest range (DEIM keeps mosaic for
+the first half): four training images in a 2x2 grid around a random centre, on a canvas twice the model input, so
+objects arrive at about half their size: more small objects and more context per image. After a mosaic come the
+photometric distortion, the IoU crop and the flip, not the zoom-out (the objects are already halved). In 6-epoch COCO
+fine-tunes it was the only change that helped at 640: +0.3 AP, +0.4 AP small.
 
 Differences with the RT-DETR pipeline: the image is letterboxed (aspect ratio kept, like YOLO and like production)
 instead of stretched to 640x640, and the zoom-out fill is the letterbox gray. Multi-scale input sizes come from the
-trainer (train_coco.py --multiscale 1).
+trainer (on in train_coco.py: height and width drawn separately, 320-960 in the first quarter, 480-800 until the last
+sixth, then 640).
 """
 import numpy as np
 from PIL import Image, ImageEnhance
@@ -24,6 +26,7 @@ from rpod.data.dataset import Sample
 
 P_PHOTOMETRIC, P_ZOOM_OUT, P_IOU_CROP, P_FLIP = 0.5, 0.5, 0.8, 0.5
 P_MOSAIC = 0.5                                       # train_coco.py --mosaic 0 sets 0
+MOSAIC_FRACTION = 0.25                               # first quarter of the epochs = rpod's widest multi-scale phase
 ZOOM_OUT_MAX = 4.0                                   # canvas up to 4x the image side
 FILL = 114                                           # same gray as the letterbox padding
 CROP_SCALE, CROP_ASPECT, CROP_TRIALS = (0.3, 1.0), (0.5, 2.0), 40
@@ -35,7 +38,7 @@ def augment(sample, ctx):
     if ctx.epoch >= ctx.epochs - max(1, round(NO_AUG_FRACTION * ctx.epochs)):
         return sample
     rng = ctx.rng
-    mosaic_done = rng.random() < P_MOSAIC
+    mosaic_done = ctx.epoch < round(MOSAIC_FRACTION * ctx.epochs) and rng.random() < P_MOSAIC
     if mosaic_done:
         sample = mosaic([sample] + ctx.sample(3), ctx.imgsz, rng)
     if rng.random() < P_PHOTOMETRIC:

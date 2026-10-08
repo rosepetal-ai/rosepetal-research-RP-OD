@@ -22,8 +22,8 @@ import torch.nn as nn
 import yaml
 from torch.utils.data import DataLoader
 
-from ..cfg.schema import check_input_size, derive, queries_for, to_dict
-from ..data import DetectionDataset, MultiScaleBatchSampler, check_dataset, collate, multiscale_sizes
+from ..cfg.schema import check_input_size, derive, positions, queries_for, to_dict
+from ..data import DetectionDataset, MultiScaleBatchSampler, check_dataset, collate
 from ..data.check import format_problems
 from ..loss import HungarianMatcher, SetCriterion
 from ..nn import Detector
@@ -141,6 +141,12 @@ def _to_float(out):
     return out
 
 
+def _split(batch, size):
+    """A collated batch (images, targets, metas) in pieces of at most `size` images."""
+    images, targets, metas = batch
+    return [(images[i:i + size], targets[i:i + size], metas[i:i + size]) for i in range(0, len(images), size)]
+
+
 def _raise_open_file_limit(target=65536):
     """DataLoader workers hand every tensor to the main process as an open file: with many workers and many objects
     per batch, a limit of 1024 open files (common in containers) runs out ('received 0 items of ancdata'). Raise the
@@ -204,8 +210,10 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
           save_state=False, resume=None, multiscale=False):
     """Trains `model` (an RPOD) in place and returns {'dir', 'best_epoch', 'val', 'test'}.
 
-    multiscale: every batch at a random size from 0.75x to 1.25x imgsz (letterboxed from the original images), and the
-    last clean_fraction of the epochs (at least one) at imgsz; validation is always at imgsz.
+    multiscale: every batch at a random size, height and width drawn separately (letterboxed from the original
+    images): from 0.5x to 1.5x imgsz in the first quarter of the epochs, from 0.75x to 1.25x until the last sixth, then
+    at imgsz (rpod.data.dataset.MULTISCALE); validation is always at imgsz. The batch is split into accumulation steps
+    by its size: whole when it fits, in pieces at the largest sizes.
 
     save_state: also write weights/state.pt after every epoch (optimizer, EMA, schedule, best so far), so a long run
     that gets interrupted can continue with resume=<that file> and the same arguments. Not part of RPOD.train.
@@ -234,8 +242,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     # ---- model
     num_queries = queries_for(stats['max_objects_per_image'])
     d = derive(model.cfg, len(names), num_queries)
-    sizes = multiscale_sizes(imgsz) if multiscale else [list(imgsz)]
-    check_input_size(d['levels'], sizes[0], num_queries)
+    check_input_size(d['levels'], imgsz, num_queries)
     net = Detector(d, pretrained_backbone=state is None)
     if state:
         net.load_state_dict(state['net'])
@@ -248,24 +255,32 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     matcher = HungarianMatcher()
     criterion = SetCriterion(len(names), matcher)
 
-    micro = state['micro'] if state else _micro_batch(net, criterion, batch, sizes[-1], device, amp_dtype,
+    train_set = DetectionDataset(ds['records']['train'], imgsz, len(names), augment, epochs=epochs, seed=r['seed'])
+    val_set = DetectionDataset(ds['records']['val'], imgsz, len(names))
+    sampler = None
+    if multiscale:            # whole batches; the smallest side still leaves the decoder enough candidate positions
+        min_side = next(s for s in range(32, 100000, 32) if positions(d['levels'], [s, s]) >= num_queries)
+        sampler = MultiScaleBatchSampler(len(train_set), batch, imgsz, epochs, seed=r['seed'],
+                                         drop_last=len(train_set) >= batch, min_side=min_side)
+    largest = list(sampler.largest()) if sampler else list(imgsz)
+    micro = state['micro'] if state else _micro_batch(net, criterion, batch, largest, device, amp_dtype,
                                                       stats['max_objects_per_image'])   # at the largest size
-    accumulate = batch // micro
+    accumulate = math.ceil(batch / micro)
     freeze_bn = micro < r['freeze_backbone_bn_below']
     if freeze_bn:
         _freeze_backbone_bn(net)
-    log(f'batch {batch} = {micro} images x {accumulate} accumulation step(s)'
+    log(f'batch {batch} = {micro} images x {accumulate} accumulation step(s)' + (' at the largest size' if sampler else '')
         + (f' · backbone BatchNorm frozen ({micro} images per step < {r["freeze_backbone_bn_below"]})' if freeze_bn else '')
         + f" · precision {str(amp_dtype).replace('torch.', '') if amp_dtype else 'float32'} · device {device}")
     clean_epochs = max(1, round(r['clean_fraction'] * epochs))
-    if multiscale:
-        log(f'multi-scale: {len(sizes)} sizes from {sizes[0][0]}x{sizes[0][1]} to {sizes[-1][0]}x{sizes[-1][1]}, '
-            f'the last {clean_epochs} epoch(s) at {imgsz[0]}x{imgsz[1]}')
-
-    train_set = DetectionDataset(ds['records']['train'], imgsz, len(names), augment, epochs=epochs, seed=r['seed'])
-    val_set = DetectionDataset(ds['records']['val'], imgsz, len(names))
-    sampler = MultiScaleBatchSampler(len(train_set), micro, sizes, imgsz, r['seed'], len(train_set) >= micro) \
-        if multiscale else None
+    if sampler:
+        start = 0
+        for end, hs, ws in sampler.phases:
+            if end > start:
+                log(f'multi-scale: epochs {start + 1}-{end} at heights {hs[0]}-{hs[-1]} x widths {ws[0]}-{ws[-1]} '
+                    f'(drawn separately for every batch)')
+            start = max(start, end)
+        log(f'multi-scale: epochs {start + 1}-{epochs} at {imgsz[0]}x{imgsz[1]}')
     if sampler:
         loader = DataLoader(train_set, batch_sampler=sampler, num_workers=workers, collate_fn=collate,
                             pin_memory=device.type == 'cuda', persistent_workers=workers > 0)
@@ -274,7 +289,8 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                             drop_last=len(train_set) >= micro, pin_memory=device.type == 'cuda',
                             persistent_workers=workers > 0,
                             generator=torch.Generator().manual_seed(r['seed'] + (state['epoch'] if state else 0)))
-    steps_per_epoch = max(1, math.ceil(len(loader) / accumulate))
+    steps_per_epoch = max(1, len(loader) if sampler else math.ceil(len(loader) / accumulate))
+    largest_px = largest[0] * largest[1]
     optimizer = torch.optim.AdamW(_param_groups(net, r), betas=r['betas'])
     scaler = torch.amp.GradScaler('cuda', enabled=amp_dtype == torch.float16)
     ema = ModelEMA(net, r['ema_decay'], r['ema_tau'])
@@ -318,18 +334,24 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
             if sampler:
                 sampler.epoch, sampler.fixed = epoch, epoch >= schedule.end - clean_epochs
             _set_train_mode(net, freeze_bn)
-            sums, count, seen, next_report = {}, 0, 0, t0 + PROGRESS_SECONDS
+            sums, done, seen, next_report = {}, 0, 0, t0 + PROGRESS_SECONDS
             it = iter(loader)
             for step in range(steps_per_epoch):
                 factor = schedule.factor(epoch, step)
                 for g in optimizer.param_groups:
                     g['lr'] = g['base_lr'] * factor
                 group = []
-                for _ in range(accumulate):
-                    try:
-                        group.append(next(it))
-                    except StopIteration:
-                        break
+                if sampler:          # a whole batch at one size: in pieces of what fits at that size
+                    whole = next(it, None)
+                    if whole is not None:
+                        h, w = whole[0].shape[-2:]
+                        group = _split(whole, max(1, micro * largest_px // (h * w)))
+                else:
+                    for _ in range(accumulate):
+                        try:
+                            group.append(next(it))
+                        except StopIteration:
+                            break
                 if not group:
                     break
                 total_boxes = sum(len(t['labels']) for _, targets, _ in group for t in targets)
@@ -343,19 +365,19 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                     scaler.scale(losses['loss']).backward()
                     for k in ('loss', 'cls', 'bbox', 'giou'):   # on the device: read only for the log
                         sums[k] = sums.get(k, 0.0) + losses[k].detach()
-                    count += 1
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(params, r['clip_grad'])
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 ema.update(net)
+                done += 1
                 seen += total_images
                 if time.time() >= next_report:
                     next_report = time.time() + PROGRESS_SECONDS
-                    log(_progress(epoch, schedule.end, step + 1, steps_per_epoch, float(sums['loss']) * accumulate / count,
+                    log(_progress(epoch, schedule.end, step + 1, steps_per_epoch, float(sums['loss']) / done,
                                   seen, time.time() - t0))
-            means = {k: float(v) * accumulate / max(count, 1) for k, v in sums.items()}   # per effective batch
+            means = {k: float(v) / max(done, 1) for k, v in sums.items()}   # per optimizer step (effective batch)
 
             metrics = validate(ema.ema, val_set, names, device, micro, workers=workers, amp_dtype=amp_dtype)
             phase = schedule.phase(epoch)

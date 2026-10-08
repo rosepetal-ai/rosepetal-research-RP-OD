@@ -94,8 +94,9 @@ class RPOD:
         batch: effective batch; if it does not fit in the GPU it is split into accumulation steps (shown in the log).
             4 by default: more optimizer steps per epoch trained clearly better on small datasets.
         augment: optional function(sample, ctx) -> sample from your augmentation library (training images only).
-        multiscale: train every batch at a random size from 0.75x to 1.25x imgsz (the last epochs at imgsz), so the
-            model learns objects at more scales; validation and production stay at imgsz.
+        multiscale: train every batch at a random size, height and width drawn separately: from 0.5x to 1.5x imgsz in
+            the first quarter of the epochs, from 0.75x to 1.25x until the last sixth, then at imgsz; the model learns
+            objects at more scales and shapes. Validation and production stay at imgsz.
         Returns {'dir', 'best_epoch', 'val', 'test'} with the final metrics.
         """
         return _train(self, data, _size(imgsz), int(epochs), int(patience), int(batch), device or _default_device(),

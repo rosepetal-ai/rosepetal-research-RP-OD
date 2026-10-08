@@ -113,7 +113,9 @@ def test_multiscale_training_runs(tmp_path, monkeypatch, capsys):
     m = RPOD(backbone='hgnetv2-b0')
     res = m.train(data, imgsz=160, epochs=3, patience=3, batch=2, device='cpu', name='ms', multiscale=True)
     out = capsys.readouterr().out
-    assert 'multi-scale: 3 sizes from 128x128 to 192x192, the last 1 epoch(s) at 160x160' in out
+    assert 'multi-scale: epochs 1-1 at heights 128-224 x widths 128-224' in out      # not below 128: 300 queries
+    assert 'multi-scale: epochs 2-2 at heights 128-192 x widths 128-192' in out
+    assert 'multi-scale: epochs 3-3 at 160x160' in out
     assert yaml.safe_load(open(res['dir'] / 'args.yaml'))['multiscale'] is True
     assert m.imgsz == [160, 160] and len(list(csv.DictReader(open(res['dir'] / 'results.csv')))) == 3
 
@@ -131,3 +133,9 @@ def test_open_file_limit_is_raised_for_dataloader_workers():
         assert resource.getrlimit(resource.RLIMIT_NOFILE)[0] == (65536 if hard == resource.RLIM_INFINITY else min(65536, hard))
     finally:
         resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+
+
+def test_multiscale_batches_are_split_in_pieces():
+    from rpod.engine.trainer import _split
+    batch = (torch.zeros(8, 3, 4, 4), [{}] * 8, [{}] * 8)
+    assert [len(p[0]) for p in _split(batch, 3)] == [3, 3, 2] and len(_split(batch, 20)) == 1

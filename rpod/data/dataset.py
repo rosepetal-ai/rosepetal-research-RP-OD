@@ -141,34 +141,46 @@ def collate(batch):
     return torch.stack(images), list(targets), list(metas)
 
 
-def multiscale_sizes(imgsz, low=0.75, high=1.25, stride=32):
-    """Input sizes for multi-scale training: imgsz scaled from `low` to `high`, both sides multiples of `stride`,
-    aspect ratio kept (to the nearest stride). Sorted by area; imgsz itself is always one of them."""
-    h, w = imgsz
-    sizes = {(h, w)}
-    for k in range(-math.floor(h * (1 - low) / stride), math.floor(h * (high - 1) / stride) + 1):
-        f = (h + k * stride) / h
-        sizes.add((h + k * stride, max(stride, round(w * f / stride) * stride)))
-    return [list(x) for x in sorted(sizes, key=lambda x: x[0] * x[1])]
+# Multi-scale training: (until this fraction of the epochs, each side from low x to high x imgsz). Width and height
+# are drawn separately for every batch; after the last phase, every batch at imgsz.
+MULTISCALE = ((0.25, 0.5, 1.5),          # first quarter: wide range, also extreme aspect ratios (up to 3:1)
+              (5 / 6, 0.75, 1.25))       # then a moderate range (480-800 at 640), until the last sixth
+
+
+def side_choices(side, low, high, stride=32, minimum=32):
+    """The multiples of `stride` from low x side to high x side, none below `minimum`."""
+    lo = max(minimum, math.ceil(side * low / stride) * stride)
+    return list(range(lo, max(lo, math.floor(side * high / stride) * stride) + 1, stride))
 
 
 class MultiScaleBatchSampler(Sampler):
-    """Shuffled batches of (index, size) where all the images of a batch share one random size from `sizes`.
+    """Shuffled batches of (index, size) where all the images of a batch share one size, its height and width drawn
+    separately from the range of the phase the epoch is in (`phases`, see MULTISCALE); after the last phase, `base`.
 
     Each image is then letterboxed directly from the original at that size (as in production, never upscaled from
     a smaller letterbox). The trainer sets `epoch` (it seeds the order and the sizes, so a resumed run gets the same
-    batches) and `fixed` (True: every batch at `base`, for the last epochs)."""
+    batches) and `fixed` (True: every batch at `base`, for the clean last epochs)."""
 
-    def __init__(self, n, batch, sizes, base, seed=0, drop_last=True):
-        self.n, self.batch, self.sizes, self.base = n, batch, [tuple(x) for x in sizes], tuple(base)
+    def __init__(self, n, batch, base, epochs, phases=MULTISCALE, seed=0, drop_last=True, stride=32, min_side=32):
+        self.n, self.batch, self.base = n, batch, tuple(base)
+        self.phases = [(round(f * epochs), side_choices(base[0], lo, hi, stride, min_side),
+                        side_choices(base[1], lo, hi, stride, min_side)) for f, lo, hi in phases]
         self.seed, self.drop_last, self.epoch, self.fixed = seed, drop_last, 0, False
 
     def __len__(self):
         return self.n // self.batch if self.drop_last else math.ceil(self.n / self.batch)
 
+    def choices(self, epoch):
+        """(heights, widths) the batches of this epoch are drawn from; None: every batch at `base`."""
+        return next(((hs, ws) for end, hs, ws in self.phases if epoch < end), None)
+
+    def largest(self):
+        return max([self.base] + [(max(hs), max(ws)) for _, hs, ws in self.phases], key=lambda x: x[0] * x[1])
+
     def __iter__(self):
         rng = np.random.default_rng([self.seed, self.epoch])
         order = rng.permutation(self.n)
+        choices = None if self.fixed else self.choices(self.epoch)
         for k in range(len(self)):
-            size = self.base if self.fixed else self.sizes[rng.integers(len(self.sizes))]
+            size = self.base if choices is None else (int(rng.choice(choices[0])), int(rng.choice(choices[1])))
             yield [(int(i), size) for i in order[k * self.batch:(k + 1) * self.batch]]
