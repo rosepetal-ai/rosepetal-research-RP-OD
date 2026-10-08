@@ -3,7 +3,7 @@
 Real-time object detection for industrial vision. A dense head proposes candidates and a transformer decoder refines
 their boxes and removes duplicates, so there is no NMS. Architecture: `docs/architecture.svg`. Each box edge is a
 probability distribution that every decoder layer sharpens, and the last layer teaches the earlier ones
-(`rpod/nn/decoder.py`, `rpod/loss/criterion.py`).
+(`rpod/nn/decoder.py`, `rpod/loss/criterion.py`). Where each idea comes from: `docs/ORIGINS.md`.
 
 Everything is used from Python through one object, `RPOD`.
 
