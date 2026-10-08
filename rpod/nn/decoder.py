@@ -15,6 +15,7 @@ import math
 
 import torch
 import torch.nn as nn
+from torch.nn.utils.rnn import pad_sequence
 
 from ..utils.boxes import cxcywh_to_xyxy, inverse_sigmoid, xyxy_to_cxcywh
 from .deform_attn import MSDeformableAttention
@@ -105,14 +106,9 @@ def build_denoising_group(targets, num_classes, num_queries, class_embed, num_de
     num_group = max(1, num_denoising // max_gt)
     bs = len(num_gts)
     device = class_embed.weight.device
-    cls = torch.full([bs, max_gt], num_classes, dtype=torch.int64, device=device)
-    box = torch.zeros([bs, max_gt, 4], device=device)
-    pad = torch.zeros([bs, max_gt], dtype=torch.bool, device=device)
-    for i, n in enumerate(num_gts):
-        if n:
-            cls[i, :n] = targets[i]['labels']
-            box[i, :n] = targets[i]['boxes']
-            pad[i, :n] = True
+    cls = pad_sequence([t['labels'].to(device) for t in targets], batch_first=True, padding_value=num_classes)
+    box = pad_sequence([t['boxes'].to(device, torch.float32) for t in targets], batch_first=True)
+    pad = cls != num_classes                                     # the real objects (labels are below num_classes)
     cls, box, pad = cls.tile(1, 2 * num_group), box.tile(1, 2 * num_group, 1), pad.tile(1, 2 * num_group)
     negative = torch.zeros([bs, 2 * max_gt, 1], device=device)
     negative[:, max_gt:] = 1

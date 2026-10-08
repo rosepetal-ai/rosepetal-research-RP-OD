@@ -17,19 +17,19 @@ def box_area(b):
 
 
 def box_iou(a, b):
-    """Pairwise IoU between xyxy boxes a [N, 4] and b [M, 4] -> (iou [N, M], union [N, M])."""
-    lt = torch.max(a[:, None, :2], b[None, :, :2])
-    rb = torch.min(a[:, None, 2:], b[None, :, 2:])
+    """Pairwise IoU between xyxy boxes a [..., N, 4] and b [..., M, 4] -> (iou [..., N, M], union [..., N, M])."""
+    lt = torch.max(a[..., :, None, :2], b[..., None, :, :2])
+    rb = torch.min(a[..., :, None, 2:], b[..., None, :, 2:])
     inter = (rb - lt).clamp(min=0).prod(-1)
-    union = box_area(a)[:, None] + box_area(b)[None, :] - inter
+    union = box_area(a)[..., :, None] + box_area(b)[..., None, :] - inter
     return inter / union.clamp(min=1e-7), union
 
 
 def generalized_box_iou(a, b):
-    """Pairwise GIoU between xyxy boxes, in [-1, 1]."""
+    """Pairwise GIoU between xyxy boxes a [..., N, 4] and b [..., M, 4], in [-1, 1]."""
     iou, union = box_iou(a, b)
-    lt = torch.min(a[:, None, :2], b[None, :, :2])
-    rb = torch.max(a[:, None, 2:], b[None, :, 2:])
+    lt = torch.min(a[..., :, None, :2], b[..., None, :, :2])
+    rb = torch.max(a[..., :, None, 2:], b[..., None, :, 2:])
     enclose = (rb - lt).clamp(min=0).prod(-1)
     return iou - (enclose - union) / enclose.clamp(min=1e-7)
 

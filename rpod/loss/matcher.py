@@ -7,6 +7,7 @@ import itertools
 import torch
 import torch.nn as nn
 from scipy.optimize import linear_sum_assignment
+from torch.nn.utils.rnn import pad_sequence
 
 from ..utils.boxes import cxcywh_to_xyxy, generalized_box_iou
 
@@ -50,10 +51,7 @@ class HungarianMatcher(nn.Module):
         for out in outputs_list:
             logits, boxes = out['pred_logits'], out['pred_boxes']
             if 'valid' in out:
-                for i, t in enumerate(targets):
-                    if sizes[i]:
-                        c = self._cost(logits[i], boxes[i], t['labels'], t['boxes'])
-                        pieces.append(c.masked_fill(~out['valid'][min(i, len(out['valid']) - 1)], 1e6).flatten())
+                pieces += self._dense_costs(logits, boxes, out['valid'], targets, sizes)
             else:
                 c = self._cost(logits.flatten(0, 1), boxes.flatten(0, 1), tgt_ids, tgt_boxes).view(*logits.shape[:2], -1)
                 pieces += [c[i, :, offsets[i]:offsets[i + 1]].flatten() for i in range(len(targets)) if sizes[i]]
@@ -65,6 +63,31 @@ class HungarianMatcher(nn.Module):
             nq = out['pred_logits'].shape[1]
             result.append([self._assign(next(costs).view(nq, n)) if n else (empty, empty) for n in sizes])
         return result
+
+    def _dense_costs(self, logits, boxes, valid, targets, sizes, budget=1 << 24):
+        """Costs of every token against the objects of its own image, [tokens x objects] flattened per image with
+        objects. Images go in groups whose [images, tokens, most objects] cost stays under `budget` elements: one set of
+        operations per group instead of per image."""
+        tokens = logits.shape[1]
+        out, start = [], 0
+        while start < len(targets):
+            end = start + 1
+            while end < len(targets) and (end + 1 - start) * tokens * max(sizes[start:end + 1]) <= budget:
+                end += 1
+            m = max(sizes[start:end])
+            if m:
+                group = targets[start:end]                       # padded to the most objects of the group
+                ids = pad_sequence([t['labels'] for t in group], batch_first=True)
+                tgt = pad_sequence([t['boxes'].to(boxes.dtype) for t in group], batch_first=True, padding_value=0.5)
+                p = logits[start:end].sigmoid().gather(2, ids[:, None, :].expand(-1, tokens, -1))
+                neg = (1 - self.alpha) * p ** self.gamma * -(1 - p + 1e-8).log()
+                pos = self.alpha * (1 - p) ** self.gamma * -(p + 1e-8).log()
+                c = (self.cost_class * (pos - neg) + self.cost_bbox * torch.cdist(boxes[start:end], tgt, p=1)
+                     - self.cost_giou * generalized_box_iou(cxcywh_to_xyxy(boxes[start:end]), cxcywh_to_xyxy(tgt)))
+                c = c.masked_fill(~valid[start:end] if len(valid) > 1 else ~valid, 1e6)
+                out += [c[j, :, :sizes[start + j]].flatten() for j in range(end - start) if sizes[start + j]]
+            start = end
+        return out
 
     @staticmethod
     def _assign(cost):
