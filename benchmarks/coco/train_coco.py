@@ -9,10 +9,9 @@ rate decaying over the second half (--final-fraction 0.5: flat for 80 % of a 72-
 from epoch ~40 with nothing gained in the decay), batch 32 (split into accumulation steps automatically if it does not
 fit). Everything else is the library recipe.
 
-    python train_coco.py --name max_b2 --epochs 72                       # the maximum model: b2, neck l, 6 layers
-    python train_coco.py --name b2_m3 --neck-size m --decoder-layers 3 --epochs 12 \
-                         --init runs/train/max_b2/weights/best.pt         # a reduced model, starting from the maximum
-    python train_coco.py --resume runs/train/max_b2/weights/state.pt     # continue an interrupted run
+    python train_coco.py --name rpod_s --size s                          # COCO pretraining of the size s
+    python train_coco.py --name pilot --size s --epochs 12               # a 12-epoch pilot
+    python train_coco.py --resume runs/train/rpod_s/weights/state.pt     # continue an interrupted run
 
 Every run saves its whole training state after each epoch (weights/state.pt), so it can be resumed.
 """
@@ -27,36 +26,36 @@ import rpod.engine.trainer as trainer  # noqa: E402
 import augment as augment_module  # noqa: E402
 from augment import augment  # noqa: E402
 from rpod import RPOD  # noqa: E402
+from rpod.cfg.schema import SIZES, from_dict, size_of  # noqa: E402
 
 QUERIES = 300
+SIZE_LR = {'s': (2e-4, 1e-4), 'm': (2e-4, 2e-5), 'l': (2e-4, 1e-5)}   # head / backbone: D-FINE's 0.5x, 0.1x, 0.05x
 
 p = argparse.ArgumentParser()
 p.add_argument('--name')
 p.add_argument('--data', default='coco/coco.yaml')
 p.add_argument('--epochs', type=int, default=72)
 p.add_argument('--batch', type=int, default=32)
-p.add_argument('--lr', type=float, default=None, help='default: the library recipe')
-p.add_argument('--backbone-lr', type=float, default=None, help='default: the library recipe')
+p.add_argument('--size', choices=list(SIZES), default='s')
+p.add_argument('--lr', type=float, default=None, help='default: 2e-4')
+p.add_argument('--backbone-lr', type=float, default=None, help='default: 1e-4 (s), 2e-5 (m), 1e-5 (l)')
 p.add_argument('--final-fraction', type=float, default=0.5, help='share of the epochs with the learning rate decaying')
-p.add_argument('--backbone', default='hgnetv2-b2')
-p.add_argument('--neck-size', default='l')
-p.add_argument('--decoder-layers', type=int, default=6)
 p.add_argument('--multiscale', type=int, default=1,
                help='height and width drawn separately per batch: 320-960 in the first quarter of the epochs, 480-800 '
                     'until the last sixth, then 640 (0: always 640)')
 p.add_argument('--mosaic', type=int, default=1,
                help='mosaic augmentation with probability 0.5 in the first quarter of the epochs (0: off)')
-p.add_argument('--init', default=None, help='checkpoint to start from, any configuration (loads what fits)')
+p.add_argument('--init', default=None, help='checkpoint to start from, any size (loads what fits)')
 p.add_argument('--resume', default=None, help='weights/state.pt of an interrupted run: everything else comes from it')
 a = p.parse_args()
 
 if a.resume:      # same configuration, recipe, data, epochs and batch as the interrupted run
     import torch
     run_args = torch.load(a.resume, map_location='cpu', weights_only=True)['args']
-    cfg = run_args['model']
+    a.size = size_of(from_dict(run_args['model']))
+    if a.size is None:
+        p.error(f'{a.resume} is a run of a model that is not a standard size: resume it with the RP-OD it started with')
     a.name, a.data, a.epochs, a.batch = run_args['name'], run_args['data'], run_args['epochs'], run_args['batch']
-    a.backbone, a.neck_size = cfg['backbone'], cfg['neck']['size']
-    a.decoder_layers = cfg['decoder']['layers']
     a.lr, a.backbone_lr, a.init = run_args['recipe']['lr'], run_args['recipe']['backbone_lr'], None
     a.multiscale = int(run_args.get('multiscale', False))
     a.mosaic = int(run_args['recipe'].get('mosaic', 0))
@@ -65,14 +64,12 @@ elif not a.name:
     p.error('--name is required (unless --resume)')
 
 trainer.queries_for = lambda max_objects: QUERIES
-if a.lr is not None:
-    trainer.RECIPE['lr'] = a.lr
-if a.backbone_lr is not None:
-    trainer.RECIPE['backbone_lr'] = a.backbone_lr
+trainer.RECIPE['lr'] = a.lr if a.lr is not None else SIZE_LR[a.size][0]
+trainer.RECIPE['backbone_lr'] = a.backbone_lr if a.backbone_lr is not None else SIZE_LR[a.size][1]
 trainer.RECIPE['final_fraction'] = a.final_fraction
 augment_module.P_MOSAIC = 0.5 if a.mosaic else 0.0
 trainer.RECIPE['mosaic'] = a.mosaic                 # recorded in args.yaml and the resumable state
-model = RPOD(backbone=a.backbone, neck_size=a.neck_size, decoder_layers=a.decoder_layers)
+model = RPOD(a.size)
 if a.init:
     model.net = RPOD(a.init).net      # the trainer loads what fits (fewer levels, blocks or layers) and logs a report
 trainer.train(model, a.data, [640, 640], a.epochs, a.epochs, a.batch, 'cuda', augment, a.name, save_state=True,

@@ -1,18 +1,13 @@
 """The COCO numbers of a checkpoint as papers report them: pycocotools on the official instances_val2017.json (crowd
 regions ignored, up to 100 detections per image, AP by object size).
 
---decoder-layers N evaluates the same weights keeping only the first N decoder layers, without retraining: every layer
-was trained with its own loss, so each one is already a complete detector. --neck-size loads the weights into a
-smaller neck (approximate without fine-tuning: shows how much the reduction loses).
 --imgsz evaluates at another input size (the network has no size-specific weights) and --queries keeps another number
 of candidates for the decoder; both without retraining. APs50 / APs75: small objects at IoU 0.5 and 0.75.
 
-    python eval_coco.py runs/train/max_b2/weights/best.pt
-    python eval_coco.py runs/train/max_b2/weights/best.pt --decoder-layers 3
+    python eval_coco.py runs/train/rpod_s/weights/best.pt
 """
 import argparse
 import contextlib
-import dataclasses
 import io
 import json
 import sys
@@ -26,32 +21,19 @@ from pycocotools.cocoeval import COCOeval  # noqa: E402
 from torch.utils.data import DataLoader  # noqa: E402
 
 from rpod import RPOD  # noqa: E402
-from rpod.cfg.schema import derive  # noqa: E402
+from rpod.cfg.schema import describe  # noqa: E402
 from rpod.data import DetectionDataset, check_dataset, collate  # noqa: E402
 from rpod.engine.predictor import postprocess  # noqa: E402
-from rpod.nn import Detector  # noqa: E402
-from rpod.utils.checkpoint import load_weights  # noqa: E402
 
 STATS = ['AP', 'AP50', 'AP75', 'APs', 'APm', 'APl', 'AR1', 'AR10', 'AR100', 'ARs', 'ARm', 'ARl']
 
 
 @torch.no_grad()
-def evaluate(ckpt, data='coco/coco.yaml', ann='coco/annotations/instances_val2017.json', decoder_layers=None,
-             neck_size=None, imgsz=None, queries=None, batch=32, workers=8):
+def evaluate(ckpt, data='coco/coco.yaml', ann='coco/annotations/instances_val2017.json', imgsz=None, queries=None,
+             batch=32, workers=8):
     model = RPOD(ckpt)
     imgsz = [imgsz, imgsz] if isinstance(imgsz, int) else list(imgsz or model.imgsz)
-    cfg = model.cfg
-    if decoder_layers and decoder_layers > cfg.decoder.layers:
-        raise ValueError(f'the checkpoint has {cfg.decoder.layers} decoder layers')
-    cfg = dataclasses.replace(
-        cfg, decoder=dataclasses.replace(cfg.decoder, layers=decoder_layers or cfg.decoder.layers),
-        neck=dataclasses.replace(cfg.neck, size=neck_size or cfg.neck.size))
-    if cfg != model.cfg:
-        net = Detector(derive(cfg, len(model.names), model.num_queries), pretrained_backbone=False)
-        load_weights(net, model.net.state_dict())
-    else:
-        net = model.net
-    net = net.cuda().eval()
+    net = model.net.cuda().eval()
     if queries:
         net.decoder.num_queries = queries
     root = Path(data).resolve().parent
@@ -83,8 +65,7 @@ def evaluate(ckpt, data='coco/coco.yaml', ann='coco/annotations/instances_val201
         p = prec[t]
         stats[name] = round(100 * float(p[p > -1].mean()), 1)
     params = sum(p.numel() for p in net.parameters()) / 1e6
-    c = cfg
-    row = {'model': f'{c.backbone} · neck {c.neck.size} · {c.decoder.layers} layers',
+    row = {'model': describe(model.cfg),
            'params_M': round(params, 1), 'imgsz': imgsz, 'queries': net.decoder.num_queries, **stats,
            'checkpoint': str(ckpt)}
     return row
@@ -95,8 +76,6 @@ if __name__ == '__main__':
     p.add_argument('ckpt')
     p.add_argument('--data', default='coco/coco.yaml')
     p.add_argument('--ann', default='coco/annotations/instances_val2017.json')
-    p.add_argument('--decoder-layers', type=int, default=None)
-    p.add_argument('--neck-size', default=None)
     p.add_argument('--imgsz', type=int, default=None)
     p.add_argument('--queries', type=int, default=None)
     p.add_argument('--batch', type=int, default=32)

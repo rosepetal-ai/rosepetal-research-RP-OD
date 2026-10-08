@@ -1,1 +1,1 @@
-from .schema import ConfigError, ModelConfig, derive, load_config
+from .schema import SIZES, Architecture, ConfigError, derive, model_config

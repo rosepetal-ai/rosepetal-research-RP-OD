@@ -3,9 +3,8 @@
 A checkpoint carries everything needed to use the model: weights, architecture, class names, input size, number of
 queries and the recommended confidence threshold.
 
-Partial loading matches weights by name and shape, so a pretrained model can initialize any combination of knobs:
-a smaller neck takes the first fusion blocks, fewer decoder layers take the first layers, and only what does not fit
-(other classes) keeps its fresh initialization.
+Partial loading matches weights by name and shape, so a pretrained model (the COCO pretraining of a size)
+initializes the same size for a dataset with other classes: only the class heads keep their fresh initialization.
 """
 import datetime
 

@@ -22,7 +22,7 @@ import torch.nn as nn
 import yaml
 from torch.utils.data import DataLoader
 
-from ..cfg.schema import check_input_size, derive, positions, queries_for, to_dict
+from ..cfg.schema import check_input_size, derive, from_dict, positions, queries_for, to_dict
 from ..data import DetectionDataset, MultiScaleBatchSampler, check_dataset, collate
 from ..data.check import format_problems
 from ..loss import HungarianMatcher, SetCriterion
@@ -220,7 +220,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     """
     r = RECIPE
     state = torch.load(resume, map_location='cpu', weights_only=True) if resume else None
-    if state and state['args']['model'] != to_dict(model.cfg):
+    if state and from_dict(state['args']['model']) != model.cfg:
         raise ValueError(f'{resume} is a run of another model configuration')
     torch.manual_seed(r['seed'])
     np.random.seed(r['seed'])

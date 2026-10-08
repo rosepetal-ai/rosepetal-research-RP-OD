@@ -7,7 +7,7 @@ import torch
 from PIL import Image
 
 from rpod import RPOD
-from rpod.cfg.schema import derive, load_config
+from rpod.cfg.schema import SIZES, Architecture, derive
 from rpod.engine.predictor import postprocess
 from rpod.nn import Detector
 from rpod.utils.checkpoint import load_weights
@@ -18,9 +18,7 @@ from .conftest import NAMES, make_net
 def test_checkpoint_roundtrip(trained_ckpt):
     m = RPOD(trained_ckpt)
     assert m.names == NAMES and m.imgsz == [256, 320] and m.threshold == 0.01
-    assert 'trained, 3 classes' in repr(m)
-    with pytest.raises(ValueError, match='only apply to new models'):
-        RPOD(trained_ckpt, backbone='resnet18')
+    assert 'size s' in repr(m) and 'trained, 3 classes' in repr(m)
 
 
 def test_untrained_model_refuses_to_predict():
@@ -29,7 +27,7 @@ def test_untrained_model_refuses_to_predict():
 
 
 def test_info_reports_blocks():
-    s = RPOD(backbone='hgnetv2-b0').info(imgsz=[250, 330], verbose=False)
+    s = RPOD('s').info(imgsz=[250, 330], verbose=False)
     assert s['imgsz'] == [256, 352]          # rounded up to multiples of 32
     assert s['total'] == s['backbone'] + s['neck'] + s['query selection'] + s['decoder'] and s['gflops'] > 0
 
@@ -69,34 +67,22 @@ def test_export_contract(trained_ckpt):
     cfg = json.loads((out / 'config.json').read_text())
     assert cfg['common']['image_shape'] == {'height': 256, 'width': 320, 'channels': 3}
     assert cfg['task_specific']['classes'] == {'0': 'scratch', '1': 'screw', '2': 'label'}
-    assert cfg['task_specific']['confidence'] == 0.01 and cfg['common']['model_name'] == 'rpod-hgnetv2-b0'
+    assert cfg['task_specific']['confidence'] == 0.01 and cfg['common']['model_name'] == 'rpod-s'
 
 
-def test_partial_loading_across_knobs():
-    src = make_net(num_classes=80, neck_size='l', decoder_layers=6)       # e.g. a pretrained model
-    dst = Detector(derive(load_config(neck_size='m', decoder_layers=3), 3), pretrained_backbone=False)
+def test_a_pretrained_model_initializes_the_same_size_for_other_classes():
+    src = make_net(num_classes=80)                                           # e.g. the COCO pretraining of s
+    dst = Detector(derive(SIZES['s'], 3), pretrained_backbone=False)
     report = load_weights(dst, src.state_dict())
     assert report['loaded_fraction'] > 0.95
-    assert {'decoder.enc_score_head', 'decoder.dec_score_head', 'decoder.denoising_class_embed'} <= set(
-        report['reinitialized'])                                         # classes differ: fresh class heads
-    assert torch.equal(dst.state_dict()['neck.fuse_td.p3.blocks.1.conv1.conv.weight'],
-                       src.state_dict()['neck.fuse_td.p3.blocks.1.conv1.conv.weight'])
-
-
-def test_maximum_model_loads_fully_into_every_reduced_config():
-    """The pretraining plan: one model with every option at its maximum feeds any smaller configuration."""
-    src = make_net(num_classes=80, neck_size='l', decoder_layers=6)
-    for neck in ('s', 'm', 'l'):
-        for layers in (3, 4, 5, 6):
-            dst = make_net(num_classes=80, neck_size=neck, decoder_layers=layers)
-            report = load_weights(dst, src.state_dict())
-            assert report['loaded_fraction'] == 1.0, (neck, layers, report['summary'])
+    assert {'decoder.enc_score_head', 'decoder.dec_score_head', 'decoder.denoising_class_embed'} == set(
+        report['reinitialized'])                                         # only the class heads start fresh
 
 
 def test_decoder_truncation_is_exact():
     """Each decoder layer is trained as a full detector: keeping the first N gives exactly layer N's predictions."""
-    full = make_net(decoder_layers=6)
-    short = make_net(decoder_layers=3)
+    full = make_net(arch=Architecture('hgnetv2-b0', 1, 6))
+    short = make_net(arch=Architecture('hgnetv2-b0', 1, 3))
     load_weights(short, full.state_dict())
     x = torch.rand(1, 3, 128, 160)
     with torch.no_grad():

@@ -28,9 +28,9 @@ class _Exportable(nn.Module):
         return out['pred_boxes'], out['pred_logits']
 
 
-def platform_config(backbone, names, imgsz, threshold):
+def platform_config(model_name, names, imgsz, threshold):
     return {
-        'common': {'model_name': f'rpod-{backbone}', 'task': 'detection',
+        'common': {'model_name': f'rpod-{model_name}', 'task': 'detection',
                    'image_shape': {'height': int(imgsz[0]), 'width': int(imgsz[1]), 'channels': 3}, 'max_batch': 1},
         'task_specific': {'classes': {str(i): n for i, n in sorted(names.items())},
                           'confidence': round(float(threshold), 4), 'iou': 0.7},
@@ -38,7 +38,8 @@ def platform_config(backbone, names, imgsz, threshold):
     }
 
 
-def export_onnx(net, backbone, names, imgsz, threshold, output_dir, check=True):
+def export_onnx(net, model_name, names, imgsz, threshold, output_dir, check=True):
+    """model_name: the size ('s', 'm', 'l'); the platform sees it as rpod-<size>."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     onnx_path = output_dir / 'model.onnx'
@@ -49,7 +50,7 @@ def export_onnx(net, backbone, names, imgsz, threshold, output_dir, check=True):
         warnings.simplefilter('ignore')
         torch.onnx.export(_Exportable(fused), (x,), str(onnx_path), input_names=['images'], output_names=['dets', 'labels'],
                           opset_version=OPSET, dynamo=False)
-    (output_dir / 'config.json').write_text(json.dumps(platform_config(backbone, names, imgsz, threshold), indent=2))
+    (output_dir / 'config.json').write_text(json.dumps(platform_config(model_name, names, imgsz, threshold), indent=2))
     if check:
         _check(onnx_path, reference, x)
     return output_dir

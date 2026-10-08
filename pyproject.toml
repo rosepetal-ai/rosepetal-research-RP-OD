@@ -26,5 +26,3 @@ dev = ["pytest", "onnx", "onnxruntime", "pycocotools"]
 [tool.setuptools.packages.find]
 include = ["rpod*"]
 
-[tool.setuptools.package-data]
-rpod = ["cfg/models/*.yaml"]

@@ -92,7 +92,11 @@ def describe(a):
     if not a:
         return ''
     m, r = a['model'], a.get('recipe', {})
-    parts = [f"{m['backbone']} · neck {m['neck']['size']} · {m['decoder']['layers']} decoder layers",
+    if 'neck' in m:          # runs made before the sizes
+        model = f"{m['backbone']} · neck {m['neck']['size']} · {m['decoder']['layers']} decoder layers"
+    else:
+        model = (f"size {m['size']} · " if m.get('size') else '') + f"{m['backbone']} · {m['decoder_layers']} decoder layers"
+    parts = [model,
              f"{a['imgsz'][0]}×{a['imgsz'][1]}", f"lr {r.get('lr', 0):g} / backbone {r.get('backbone_lr', 0):g}",
              f"batch {a['batch']}"]
     parts += ['multi-scale'] if a.get('multiscale') else []

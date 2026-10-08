@@ -1,49 +1,30 @@
 import pytest
-import yaml
 
-from rpod.cfg.schema import ConfigError, ModelConfig, derive, guide, load_config, template, to_dict
-
-
-def test_defaults():
-    c = load_config()
-    assert (c.backbone, c.neck.size, c.decoder.layers) == ('hgnetv2-b2', 'm', 3)
+from rpod import RPOD
+from rpod.cfg.schema import SIZES, Architecture, ConfigError, derive, from_dict, size_of, to_dict
 
 
-def test_yaml_then_arguments_win(tmp_path):
-    p = tmp_path / 'm.yaml'
-    p.write_text('backbone: hgnetv2-b4\nneck: {size: l}\ndecoder: {layers: 5}\n')
-    c = load_config(p, decoder_layers=6)
-    assert (c.backbone, c.neck.size, c.decoder.layers) == ('hgnetv2-b4', 'l', 6)
+def test_three_sizes_and_nothing_else():
+    assert set(SIZES) == {'s', 'm', 'l'} and RPOD().cfg == SIZES['m']
+    assert [a.backbone for a in SIZES.values()] == ['hgnetv2-b0', 'hgnetv2-b2', 'hgnetv2-b4']   # grows with the size
+    with pytest.raises(ValueError, match="give a size"):
+        RPOD('xl')
+    with pytest.raises(TypeError):
+        RPOD('s', backbone='hgnetv2-b4')
 
 
-@pytest.mark.parametrize('args,message', [
-    ({'backbone': 'resnet50'}, 'not one of'),
-    ({'neck_size': 'xl'}, 'not one of'),
-    ({'decoder_layers': 8}, 'not one of'),
-    ({'decoder_layer': 4}, "did you mean 'decoder_layers'"),
-])
-def test_bad_arguments_explain_the_fix(args, message):
-    with pytest.raises(ConfigError, match=message):
-        load_config(**args)
-
-
-def test_unknown_yaml_key_suggests(tmp_path):
-    p = tmp_path / 'm.yaml'
-    p.write_text('neck: {sise: s}\n')
-    with pytest.raises(ConfigError, match="did you mean 'neck.size'"):
-        load_config(p)
-
-
-def test_template_is_the_default_config_and_guide_lists_every_knob(tmp_path):
-    p = tmp_path / 't.yaml'
-    p.write_text(template())
-    assert to_dict(load_config(p)) == to_dict(ModelConfig())
-    for key in ('backbone', 'neck.size', 'decoder.layers'):
-        assert f'`{key}`' in guide()
+def test_checkpoint_config_round_trip_and_the_knobs_of_older_checkpoints():
+    for arch in SIZES.values():
+        assert from_dict(to_dict(arch)) == arch
+    assert from_dict({'backbone': 'hgnetv2-b0', 'neck': {'size': 's'}, 'decoder': {'layers': 3}}) == SIZES['s']
+    assert size_of(from_dict({'backbone': 'hgnetv2-b0', 'neck': {'size': 'l'}, 'decoder': {'layers': 6}})) is None
+    with pytest.raises(ConfigError, match='not part of this version'):
+        from_dict({'backbone': 'resnet18', 'neck_blocks': 1, 'decoder_layers': 3})
 
 
 def test_derived_settings():
-    d = derive(load_config(backbone='hgnetv2-b4', neck_size='s'), num_classes=4, num_queries=100)
+    d = derive(SIZES['l'], num_classes=4, num_queries=100)
     assert d['levels'] == [3, 4, 5] and d['anchor_size'] == 0.05
-    assert d['fusion_blocks'] == 1 and d['fusion_expansion'] == 1.0
+    assert d['fusion_blocks'] == 3 and d['fusion_expansion'] == 1.0 and d['dec_layers'] == 6
     assert d['num_queries'] == 300   # never below the minimum
+    assert derive(Architecture('hgnetv2-b0', 2, 5), 1)['fusion_blocks'] == 2

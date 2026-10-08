@@ -1,7 +1,7 @@
 """RPOD: the one object to create, inspect, predict with and export a detector.
 
     from rpod import RPOD
-    model = RPOD('rpod.yaml', backbone='hgnetv2-b4')   # new model: YAML (optional) + arguments, arguments win
+    model = RPOD('s')                                  # new model of a size: 's', 'm' (default) or 'l'
     model = RPOD('runs/train/exp/weights/best.pt')     # trained model: everything comes from the checkpoint
     model.info()
     results = model.predict(image, color='BGR')
@@ -12,7 +12,8 @@ from pathlib import Path
 import torch
 from torch.utils.flop_counter import FlopCounterMode
 
-from .cfg.schema import check_input_size, derive, load_config, positions, queries_for
+from .cfg.schema import (DEFAULT_SIZE, SIZES, check_input_size, derive, describe, model_config, positions,
+                         queries_for, size_of)
 from .data import DetectionDataset, check_dataset, class_map
 from .engine.exporter import export_onnx
 from .engine.predictor import predict as _predict
@@ -27,7 +28,8 @@ def _default_device():
 
 
 class RPOD:
-    def __init__(self, model=None, **args):
+    def __init__(self, model=DEFAULT_SIZE):
+        """model: a size, 's', 'm' or 'l' (a new model), or the path of a trained checkpoint (.pt)."""
         self.ckpt_path = None
         self.net = None            # built when training starts, or loaded from a checkpoint
         self.names = None
@@ -35,9 +37,7 @@ class RPOD:
         self.threshold = None
         self.data = None           # dataset the model was trained on
         self.num_queries = queries_for(0)
-        if model is not None and str(model).endswith('.pt'):
-            if args:
-                raise ValueError('architecture arguments only apply to new models, not to a checkpoint')
+        if str(model).endswith('.pt'):
             ckpt = load_checkpoint(model)
             self.ckpt_path = Path(model)
             self.cfg = ckpt['config']
@@ -45,14 +45,14 @@ class RPOD:
             self.threshold, self.num_queries = ckpt['threshold'], ckpt['num_queries']
             self.data = ckpt.get('data')
             self.net = build_from_checkpoint(ckpt).eval()
+        elif model in SIZES:
+            self.cfg = model_config(model)
         else:
-            self.cfg = load_config(model, **args)
+            raise ValueError(f"RPOD({model!r}): give a size ({', '.join(map(repr, SIZES))}) or a checkpoint (.pt)")
 
     def __repr__(self):
-        c = self.cfg
         state = f"trained, {len(self.names)} classes, {self.imgsz[0]}x{self.imgsz[1]}" if self.names else 'not trained'
-        return (f'RPOD(backbone={c.backbone}, neck={c.neck.size}, '
-                f'decoder_layers={c.decoder.layers}; {state})')
+        return f'RPOD({describe(self.cfg)}; {state})'
 
     # -------------------------------------------------------------------------------------------- inspect
     def info(self, imgsz=None, verbose=True):
@@ -144,7 +144,8 @@ class RPOD:
         if output_dir is None:
             output_dir = self.ckpt_path.with_name(f'{self.ckpt_path.stem}_export') if self.ckpt_path else 'rpod_export'
         threshold = 0.5 if self.threshold is None else self.threshold
-        return export_onnx(self.net, self.cfg.backbone, self.names, self.imgsz, threshold, output_dir)
+        return export_onnx(self.net, size_of(self.cfg) or self.cfg.backbone, self.names, self.imgsz, threshold,
+                           output_dir)
 
     def _require_trained(self, what):
         if self.net is None or not self.names:

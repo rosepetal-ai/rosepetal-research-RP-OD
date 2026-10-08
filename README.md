@@ -15,28 +15,28 @@ pip install -e .            # add [dev] for tests, ONNX checks and the pycocotoo
 
 ## Create a model
 
-The model YAML only describes the architecture: three knobs, each explained in `rpod/cfg/models/rpod.yaml` and
-`docs/MODEL_CONFIG.md`. Classes come from the dataset and the input size is chosen when training.
-Arguments win over the YAML.
+Three sizes and nothing else to choose: classes come from the dataset and the input size is chosen when training.
 
 ```python
 from rpod import RPOD
 
-model = RPOD()                                   # defaults: hgnetv2-b2, neck m, 3 decoder layers
-model = RPOD('rpod.yaml', backbone='hgnetv2-b4', neck_size='l', decoder_layers=4)
+model = RPOD('s')                                # 's', 'm' (default) or 'l'
 model.info(imgsz=640)                            # parameters per block and GFLOPs
 ```
 
-| Knob | Values | Default |
-|---|---|---|
-| `backbone` | `hgnetv2-b0` · `hgnetv2-b2` · `hgnetv2-b4` · `hgnetv2-b5` · `resnet18` | `hgnetv2-b2` |
-| `neck_size` | `s` · `m` · `l` | `m` |
-| `decoder_layers` | 3 – 6 | 3 |
+| Size | Backbone | Neck | Decoder | Parameters | GFLOPs (640) | Like |
+|---|---|---|---|---|---|---|
+| `s` | HGNetv2-B0 | 1 fusion block | 3 layers | 9.8 M | 26 | D-FINE-S |
+| `m` | HGNetv2-B2 | 2 fusion blocks | 4 layers | 16.0 M | 45 | D-FINE-M |
+| `l` | HGNetv2-B4 | 3 fusion blocks, twice as wide | 6 layers | 33.1 M | 110 | D-FINE-L |
+
+Parameters with 80 classes (about 0.1 M less with a few). The backbone grows with the size; the neck and the decoder
+are 256 channels wide in all three.
 
 ## Train
 
 ```python
-model = RPOD(backbone='hgnetv2-b2')
+model = RPOD('m')
 res = model.train('parts.yaml', imgsz=640, epochs=150, patience=20, batch=4, augment=None)
 res['val'].map50_95, res['val'].recall, res['val'].threshold      # final metrics of the best epoch
 model.predict(image)                                                # the object is now the best model

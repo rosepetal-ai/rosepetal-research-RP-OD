@@ -62,7 +62,7 @@ def test_train_end_to_end(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv('RPOD_WORKERS', '0')
     monkeypatch.chdir(tmp_path)
     data = make_dataset(tmp_path / 'data', {'train': 4, 'val': 2, 'test': 2})
-    m = RPOD(backbone='hgnetv2-b0')
+    m = RPOD('s')
     res = m.train(data, imgsz=128, epochs=3, patience=1, batch=2, device='cpu', name='t')
     run = res['dir']
     assert '  epoch 1/3 [' in capsys.readouterr().out
@@ -93,12 +93,12 @@ def test_interrupted_run_resumes(tmp_path, monkeypatch):
         return sample
 
     with pytest.raises(KeyboardInterrupt):
-        T.train(RPOD(backbone='hgnetv2-b0'), data, [128, 128], 4, 4, 2, 'cpu', crash_in_third_epoch, 't', save_state=True)
+        T.train(RPOD('s'), data, [128, 128], 4, 4, 2, 'cpu', crash_in_third_epoch, 't', save_state=True)
     run = tmp_path / 'runs' / 'train' / 't'
     assert torch.load(run / 'weights' / 'state.pt', weights_only=True)['epoch'] == 2
     with pytest.raises(ValueError, match='another model configuration'):
-        T.train(RPOD(backbone='hgnetv2-b2'), data, [128, 128], 4, 4, 2, 'cpu', None, 't', resume=run / 'weights' / 'state.pt')
-    res = T.train(RPOD(backbone='hgnetv2-b0'), data, [128, 128], 4, 4, 2, 'cpu', None, 't', save_state=True,
+        T.train(RPOD('m'), data, [128, 128], 4, 4, 2, 'cpu', None, 't', resume=run / 'weights' / 'state.pt')
+    res = T.train(RPOD('s'), data, [128, 128], 4, 4, 2, 'cpu', None, 't', save_state=True,
                   resume=run / 'weights' / 'state.pt')
     assert res['dir'] == run and not (tmp_path / 'runs' / 'train' / 't2').exists()
     assert [int(r['epoch']) for r in csv.DictReader(open(run / 'results.csv'))] == [1, 2, 3, 4]
@@ -110,7 +110,7 @@ def test_multiscale_training_runs(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv('RPOD_WORKERS', '0')
     monkeypatch.chdir(tmp_path)
     data = make_dataset(tmp_path / 'data', {'train': 4, 'val': 2})
-    m = RPOD(backbone='hgnetv2-b0')
+    m = RPOD('s')
     res = m.train(data, imgsz=160, epochs=3, patience=3, batch=2, device='cpu', name='ms', multiscale=True)
     out = capsys.readouterr().out
     assert 'multi-scale: epochs 1-1 at heights 128-224 x widths 128-224' in out      # not below 128: 300 queries
