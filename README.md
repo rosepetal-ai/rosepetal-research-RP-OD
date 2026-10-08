@@ -1,9 +1,9 @@
 # RP-OD
 
-Real-time object detection for industrial vision. A dense, YOLO-like head proposes candidates and a DETR-style
-decoder refines their boxes and removes duplicates, so there is no NMS. Architecture: `docs/architecture.svg`.
-Boxes are refined as in D-FINE: each edge is a probability distribution that every decoder layer sharpens, and the
-last layer teaches the earlier ones; the losses follow D-FINE and DEIM (`rpod/nn/decoder.py`, `rpod/loss/criterion.py`).
+Real-time object detection for industrial vision. A dense head proposes candidates and a transformer decoder refines
+their boxes and removes duplicates, so there is no NMS. Architecture: `docs/architecture.svg`. Each box edge is a
+probability distribution that every decoder layer sharpens, and the last layer teaches the earlier ones
+(`rpod/nn/decoder.py`, `rpod/loss/criterion.py`).
 
 Everything is used from Python through one object, `RPOD`.
 
@@ -24,11 +24,11 @@ model = RPOD('s')                                # 's', 'm' (default) or 'l'
 model.info(imgsz=640)                            # parameters per block and GFLOPs
 ```
 
-| Size | Backbone | Neck | Decoder | Parameters | GFLOPs (640) | Like |
-|---|---|---|---|---|---|---|
-| `s` | HGNetv2-B0 | 1 fusion block | 3 layers | 9.8 M | 26 | D-FINE-S |
-| `m` | HGNetv2-B2 | 2 fusion blocks | 4 layers | 16.0 M | 45 | D-FINE-M |
-| `l` | HGNetv2-B4 | 3 fusion blocks, twice as wide | 6 layers | 33.1 M | 110 | D-FINE-L |
+| Size | Backbone | Neck | Decoder | Parameters | GFLOPs (640) |
+|---|---|---|---|---|---|
+| `s` | HGNetv2-B0 | 1 fusion block | 3 layers | 9.8 M | 26 |
+| `m` | HGNetv2-B2 | 2 fusion blocks | 4 layers | 16.0 M | 45 |
+| `l` | HGNetv2-B4 | 3 fusion blocks, twice as wide | 6 layers | 33.1 M | 110 |
 
 Parameters with 80 classes (about 0.1 M less with a few). The backbone grows with the size; the neck and the decoder
 are 256 channels wide in all three.
@@ -43,14 +43,14 @@ model.predict(image)                                                # the object
 ```
 
 Only data, input size, epochs, patience, batch, device and the augmentation function are chosen; the recipe is
-fixed (RT-DETR / D-FINE / DEIM practice, adjusted with experiments on a real dataset):
+fixed (adjusted with experiments on a real dataset):
 
 | | |
 |---|---|
 | Optimizer | AdamW, lr 1e-4 for the whole network including the backbone, weight decay 1e-4 (none on norms, biases, embeddings) |
 | Schedule | warmup, flat, cosine decay over the last 20 % of the epochs; `patience` epochs without improvement start that decay early |
 | Stability | EMA of the weights (what is validated and saved), gradient clipping 0.1, mixed precision on GPU, no dropout |
-| Losses | classification MAL (DEIM); boxes L1 + GIoU, edge distributions FGL + self-distillation DDF (D-FINE), on the union of the matches of all layers; on every decoder layer, the denoising queries and the dense head (every position, not only the selected ones) |
+| Losses | classification: matchability-aware (MAL); boxes: L1 + GIoU, and on the edge distributions FGL + self-distillation from the last layer (DDF), on the union of the matches of all layers; on every decoder layer, the denoising queries and the dense head (every position, not only the selected ones) |
 | Batch | `batch` is the effective batch, 4 by default: if it does not fit in the GPU it is split into accumulation steps, shown in the log; backbone BatchNorm is frozen below 8 images per step |
 | Best epoch | highest 0.5 · mAP50-95 + 0.5 · recall (IoU ≥ 0.5, at the best-F1 threshold) |
 
