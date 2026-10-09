@@ -42,6 +42,11 @@ res['val'].map50_95, res['val'].recall, res['val'].threshold      # final metric
 model.predict(image)                                                # the object is now the best model
 ```
 
+A new model starts from the COCO-pretrained weights of its size: release files of this repository, downloaded the
+first time and cached in `~/.cache/rpod` (`RPOD_CACHE` moves it). Everything loads except the class heads, which
+depend on the dataset. `pretrained=False` keeps only the ImageNet backbone. Published so far: none yet (the `s`
+pretraining is running).
+
 Only data, input size, epochs, patience, batch, device and the augmentation function are chosen; the recipe is
 fixed (adjusted with experiments on a real dataset):
 

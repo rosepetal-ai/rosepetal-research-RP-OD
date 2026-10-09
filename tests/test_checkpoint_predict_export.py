@@ -91,3 +91,26 @@ def test_decoder_truncation_is_exact():
         out_full = full(x)
     assert torch.equal(out_short['pred_logits'], out_full['pred_logits'])
     assert torch.equal(out_short['pred_boxes'], out_full['pred_boxes'])
+
+
+def test_pretrained_weights_download_once_and_check_their_checksum(tmp_path, monkeypatch, trained_ckpt):
+    import hashlib
+    from rpod import weights as W
+    release = tmp_path / 'repo' / 'releases' / 'download' / 'weights-v1'
+    release.mkdir(parents=True)
+    (release / 'rpod-s-coco.pt').write_bytes(trained_ckpt.read_bytes())
+    sha = hashlib.sha256(trained_ckpt.read_bytes()).hexdigest()
+    monkeypatch.setattr(W, 'REPO', (tmp_path / 'repo').as_uri())
+    monkeypatch.setenv('RPOD_CACHE', str(tmp_path / 'cache'))
+    monkeypatch.setattr(W, 'PRETRAINED', {'s': ('weights-v1', 'rpod-s-coco.pt', sha)})
+    assert W.pretrained_weights('m') is None                                # nothing published for m
+    path = W.pretrained_weights('s', log=lambda m: None)
+    assert path == tmp_path / 'cache' / 'weights-v1' / 'rpod-s-coco.pt' and RPOD(path).names == NAMES
+    (release / 'rpod-s-coco.pt').unlink()
+    assert W.pretrained_weights('s') == path                                # cached: no second download
+    monkeypatch.setattr(W, 'PRETRAINED', {'s': ('weights-v2', 'rpod-s-coco.pt', '0' * 64)})
+    (tmp_path / 'repo' / 'releases' / 'download' / 'weights-v2').mkdir()
+    (tmp_path / 'repo' / 'releases' / 'download' / 'weights-v2' / 'rpod-s-coco.pt').write_bytes(b'corrupted')
+    with pytest.raises(RuntimeError, match='checksum'):
+        W.pretrained_weights('s', log=lambda m: None)
+    assert not list((tmp_path / 'cache' / 'weights-v2').iterdir())         # nothing half-written left behind
