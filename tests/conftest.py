@@ -8,6 +8,12 @@ from rpod.utils.checkpoint import save_checkpoint
 NAMES = {0: 'scratch', 1: 'screw', 2: 'label'}
 
 
+@pytest.fixture(autouse=True)
+def no_pretrained_download(monkeypatch):
+    """Tests never download the published COCO weights: a new model trains from its ImageNet backbone."""
+    monkeypatch.setattr('rpod.model.pretrained_weights', lambda size, log=print: None)
+
+
 def make_net(num_classes=3, size='s', arch=None):
     """A network of a size (or of any architecture, for the internals), random weights."""
     torch.manual_seed(0)

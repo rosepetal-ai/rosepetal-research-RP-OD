@@ -11,7 +11,9 @@ from pathlib import Path
 
 REPO = 'https://github.com/rosepetal-ai/rosepetal-research-RP-OD'
 # size -> (release tag, file name, sha256); a size missing here has no COCO weights published yet
-PRETRAINED = {}
+PRETRAINED = {
+    's': ('rpod-s-coco-v1', 'rpod-s-coco.pt', '41e188351d0dd2924e48cc943d391296de46ecdf6c7b2a04cef8572ce78808f6'),
+}
 
 
 def cache_dir():

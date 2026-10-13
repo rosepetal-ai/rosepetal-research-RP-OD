@@ -51,8 +51,13 @@ model.predict(image)                                                # the object
 
 A new model starts from the COCO-pretrained weights of its size: release files of this repository, downloaded the
 first time and cached in `~/.cache/rpod` (`RPOD_CACHE` moves it). Everything loads except the class heads, which
-depend on the dataset. `pretrained=False` keeps only the ImageNet backbone. Published so far: none yet; until a
-size is published, training prints that only its backbone is pretrained.
+depend on the dataset. `pretrained=False` keeps only the ImageNet backbone. The weights are under the same license
+as the code (below).
+
+| Size | Release | COCO val2017 AP (AP50) |
+|---|---|---|
+| `s` | `rpod-s-coco-v1` | 45.1 (62.5) |
+| `m`, `l` | in training: until they are published, training prints that only the backbone is pretrained | |
 
 Only data, input size, epochs, patience, batch, device and the augmentation function are chosen; the recipe is
 fixed (adjusted with experiments on a real dataset):
@@ -156,7 +161,7 @@ logits of every query, with no NMS to add; `config.json` holds the classes, inpu
 | Model, configuration, `info`, `predict`, `export` | done |
 | Data: YOLO format, dataset check with cache, default augmentation (replaceable) | done |
 | Training, validation metrics and plots | done |
-| COCO-pretrained weights for `s`, `m`, `l` | in progress |
+| COCO-pretrained weights | `s` published; `m`, `l` in training |
 
 ## Datasets
 
