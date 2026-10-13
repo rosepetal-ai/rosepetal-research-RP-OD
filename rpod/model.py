@@ -153,7 +153,7 @@ class RPOD:
         return _predict(self.net, self.names, self.imgsz, source, color, conf, max_det, device or _default_device())
 
     def export(self, output_dir=None):
-        """model.onnx + config.json for the vision platform. Returns the folder."""
+        """model.onnx + config.json for serving (contract in rpod/engine/exporter.py). Returns the folder."""
         self._require_trained('export')
         if output_dir is None:
             output_dir = self.ckpt_path.with_name(f'{self.ckpt_path.stem}_export') if self.ckpt_path else 'rpod_export'

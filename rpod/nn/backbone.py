@@ -1,7 +1,7 @@
 """Backbone: a timm network with ImageNet weights, returning {level: feature map} (stride = 2^level).
 
 Images come in as float tensors in [0, 1], shape [B, 3, H, W]. The ImageNet normalization the weights expect
-happens inside, so it is part of the exported model and the platform only has to divide by 255.
+happens inside, so it is part of the exported model and the serving side only has to divide by 255.
 """
 import timm
 import torch

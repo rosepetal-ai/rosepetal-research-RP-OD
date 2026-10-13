@@ -1,7 +1,8 @@
 # RP-OD
 
 Real-time object detection for industrial vision. A dense head proposes candidates and a transformer decoder refines
-their boxes and removes duplicates, so there is no NMS. Architecture: `docs/architecture.svg`. Each box edge is a
+their boxes and removes duplicates, so there is no NMS. Overview of this family of detectors, with tensor shapes:
+`docs/architecture.svg` (RP-OD uses the edge-distribution box head, option B). Each box edge is a
 probability distribution that every decoder layer sharpens, and the last layer teaches the earlier ones
 (`rpod/nn/decoder.py`, `rpod/loss/criterion.py`). Where each idea comes from: `docs/ORIGINS.md`.
 
@@ -9,8 +10,14 @@ Everything is used from Python through one object, `RPOD`.
 
 ## Install
 
+Python 3.10 or newer, PyTorch 2.1 or newer.
+
 ```bash
-pip install -e .            # add [dev] for tests, ONNX checks and the pycocotools comparison
+pip install git+https://github.com/rosepetal-ai/rosepetal-research-RP-OD    # the library
+pip install "rpod[export] @ git+https://github.com/rosepetal-ai/rosepetal-research-RP-OD"   # + ONNX export
+
+git clone https://github.com/rosepetal-ai/rosepetal-research-RP-OD && cd rosepetal-research-RP-OD
+pip install -e ".[dev]"     # development: tests, ONNX checks and the pycocotools comparison
 ```
 
 ## Create a model
@@ -44,8 +51,8 @@ model.predict(image)                                                # the object
 
 A new model starts from the COCO-pretrained weights of its size: release files of this repository, downloaded the
 first time and cached in `~/.cache/rpod` (`RPOD_CACHE` moves it). Everything loads except the class heads, which
-depend on the dataset. `pretrained=False` keeps only the ImageNet backbone. Published so far: none yet (the `s`
-pretraining is running).
+depend on the dataset. `pretrained=False` keeps only the ImageNet backbone. Published so far: none yet; until a
+size is published, training prints that only its backbone is pretrained.
 
 Only data, input size, epochs, patience, batch, device and the augmentation function are chosen; the recipe is
 fixed (adjusted with experiments on a real dataset):
@@ -133,11 +140,14 @@ r = results[0]
 r.boxes.xyxy, r.boxes.xyxyn, r.boxes.conf, r.boxes.cls, r.names
 r.save('out.jpg')
 
-model.export()                                   # model.onnx + config.json for the vision platform (Triton)
+model.export()                                   # model.onnx + config.json, for TensorRT, ONNX Runtime, Triton...
 ```
 
-`predict` letterboxes exactly like the platform's GPU pre-processing, and uses by default the confidence threshold
-recommended during validation. `export` fuses the neck for inference and checks the ONNX against PyTorch.
+`predict` letterboxes the image (aspect ratio kept, gray padding), which is the input the exported model expects too,
+and uses by default the confidence threshold recommended during validation. `export` fuses the neck for inference and
+checks the ONNX against PyTorch. The ONNX takes one letterboxed image (0-1 values) and returns the boxes and class
+logits of every query, with no NMS to add; `config.json` holds the classes, input size and recommended threshold
+(contract in `rpod/engine/exporter.py`).
 
 ## Status
 
@@ -146,7 +156,7 @@ recommended during validation. `export` fuses the neck for inference and checks 
 | Model, configuration, `info`, `predict`, `export` | done |
 | Data: YOLO format, dataset check with cache, default augmentation (replaceable) | done |
 | Training, validation metrics and plots | done |
-| `rpod` branch in the vision platform (Triton) | next |
+| COCO-pretrained weights for `s`, `m`, `l` | in progress |
 
 ## Datasets
 
@@ -173,11 +183,16 @@ def augment(sample, ctx):
 ## COCO benchmark and pretraining
 
 `benchmarks/coco/` trains and evaluates RP-OD on COCO 2017 with the protocol of the papers (AP with pycocotools,
-640×640), with the default augmentation. The model it trains also serves as pretrained weights for
-any smaller configuration.
+640×640), with the default augmentation. The model it trains for each size is also the pretrained starting point
+for training that size on other datasets.
 
 ## Tests
 
 ```bash
 python3 -m pytest tests -q
 ```
+
+## License
+
+Apache License 2.0 (`LICENSE`). Copyright 2026 Rosepetal. The ideas RP-OD builds on, and their papers, are listed in
+`docs/ORIGINS.md`.

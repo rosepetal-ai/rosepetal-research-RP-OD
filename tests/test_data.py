@@ -9,7 +9,7 @@ f = np.float32
 
 
 def reference_kernel(img, out_h, out_w, pad=114):
-    """The platform kernel's formulas (rp_preprocess_cuda.cu, letterbox, no antialias), written in numpy."""
+    """The formulas of the production CUDA letterbox kernel (without antialias), written in numpy."""
     ih, iw = img.shape[:2]
     s = min(f(out_h) / f(ih), f(out_w) / f(iw))
     rh, rw = max(1, int(np.floor(f(ih) * s))), max(1, int(np.floor(f(iw) * s)))
@@ -28,7 +28,7 @@ def reference_kernel(img, out_h, out_w, pad=114):
 
 
 @pytest.mark.parametrize('in_hw,out_hw', [((1080, 1920), (640, 640)), ((301, 177), (256, 320)), ((100, 100), (640, 480))])
-def test_letterbox_matches_platform_kernel(in_hw, out_hw):
+def test_letterbox_matches_the_gpu_kernel(in_hw, out_hw):
     img = np.random.default_rng(0).integers(0, 256, (*in_hw, 3), dtype=np.uint8)
     ours, _ = letterbox(img, *out_hw, antialias=False)
     assert np.abs(ours.numpy() - reference_kernel(img, *out_hw)).max() < 1e-5

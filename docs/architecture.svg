@@ -154,7 +154,7 @@
 <path d="M2970,548 L2870,586" fill="none" stroke="#58C4DD" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#ah2)"/>
 <rect x="2520" y="588" width="590" height="64" rx="10" fill="#F4D345" fill-opacity="0.08" stroke="#F4D345" stroke-width="2"/>
 <text x="2815" y="616" font-family="'CMU Serif','CM Symbols',Georgia,'Times New Roman',serif" font-size="20" fill="#ECE8DF" text-anchor="middle" xml:space="preserve"><tspan>Top-</tspan><tspan font-style="italic">K</tspan><tspan> by best class score</tspan></text>
-<text x="2815" y="640" font-family="'CMU Serif','CM Symbols',Georgia,'Times New Roman',serif" font-size="16" fill="#8A8F98" text-anchor="middle" xml:space="preserve"><tspan font-style="italic">K</tspan><tspan> = 300 in production · </tspan><tspan font-style="italic">K</tspan><tspan> = 8 in the video</tspan></text>
+<text x="2815" y="640" font-family="'CMU Serif','CM Symbols',Georgia,'Times New Roman',serif" font-size="16" fill="#8A8F98" text-anchor="middle" xml:space="preserve"><tspan font-style="italic">K</tspan><tspan> = 300 by default</tspan></text>
 <path d="M2815,652 L2815,684" fill="none" stroke="#F4D345" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#ah5)"/>
 <rect x="2520" y="686" width="590" height="112" rx="10" fill="#F4D345" fill-opacity="0.08" stroke="#F4D345" stroke-width="2"/>
 <text x="2536" y="718" font-family="'CMU Serif','CM Symbols',Georgia,'Times New Roman',serif" font-size="20" fill="#ECE8DF" text-anchor="start" xml:space="preserve"><tspan>gather the </tspan><tspan font-style="italic">K</tspan><tspan> winners</tspan></text>
@@ -345,4 +345,4 @@
 <line x1="2076" y1="2184" x2="3114" y2="2184" stroke="#2B3038" stroke-width="1"/>
 <text x="2076" y="2216" font-family="'CMU Serif','CM Symbols',Georgia,'Times New Roman',serif" font-size="18" fill="#ECE8DF" text-anchor="start" xml:space="preserve"><tspan>Dense O2O, MAL loss</tspan></text>
 <text x="2690" y="2216" font-family="'CMU Serif','CM Symbols',Georgia,'Times New Roman',serif" font-size="18" fill="#F0AC5F" text-anchor="start" xml:space="preserve"><tspan>DEIM (CVPR 2025)</tspan></text>
-<text x="60" y="2316" font-family="'CMU Serif','CM Symbols',Georgia,'Times New Roman',serif" font-size="16" fill="#8A8F98" text-anchor="start" xml:space="preserve"><tspan>Companion to the video “YOLO proposes, DETR refines”. Values are typical defaults (RT-DETR / D-FINE); exact channels and layer counts depend on the backbone and model size.</tspan></text></svg>
+<text x="60" y="2316" font-family="'CMU Serif','CM Symbols',Georgia,'Times New Roman',serif" font-size="16" fill="#8A8F98" text-anchor="start" xml:space="preserve"><tspan>Overview of this family of real-time DETR detectors. Values are typical defaults (RT-DETR / D-FINE); exact channels and layer counts depend on the backbone and model size.</tspan></text></svg>

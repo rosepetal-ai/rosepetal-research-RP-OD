@@ -1,7 +1,7 @@
 """Prediction: letterbox -> network -> top detections -> boxes back in original image coordinates. No NMS.
 
-Post-processing mirrors the platform's DETR decoder: sigmoid, top-k over queries x classes, confidence threshold,
-cxcywh -> xyxy, undo the letterbox scale and padding, clip to the image.
+Post-processing, the same a serving pipeline applies to the exported model: sigmoid, top-k over queries x classes,
+confidence threshold, cxcywh -> xyxy, undo the letterbox scale and padding, clip to the image.
 """
 import colorsys
 

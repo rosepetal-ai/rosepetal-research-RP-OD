@@ -1,10 +1,11 @@
-"""Export for the vision platform (Triton path): model.onnx + config.json in one folder.
+"""Export for serving: model.onnx + config.json in one folder.
 
-ONNX contract (what the platform's rp_pipeline and DETR decoder expect):
-  input   images  float32 [1, 3, H, W], values 0-1 (letterboxed; the model normalizes inside)
-  outputs dets    float32 [1, K, 4]  boxes cxcywh, normalized 0-1
-          labels  float32 [1, K, C]  class logits (the platform applies the sigmoid)
-The TensorRT engine is built by the platform on each machine.
+ONNX contract:
+  input   images  float32 [1, 3, H, W], values 0-1, letterboxed as predict() does (the model normalizes inside)
+  outputs dets    float32 [1, K, 4]  boxes cxcywh, normalized 0-1 on the letterboxed input
+          labels  float32 [1, K, C]  class logits: apply a sigmoid, keep the scores above the threshold; no NMS
+config.json: model name, input shape, classes and the confidence threshold recommended by validation.
+A TensorRT engine (or any other runtime's) is built from the ONNX on the machine that serves it.
 """
 import copy
 import json
@@ -39,7 +40,7 @@ def platform_config(model_name, names, imgsz, threshold):
 
 
 def export_onnx(net, model_name, names, imgsz, threshold, output_dir, check=True):
-    """model_name: the size ('s', 'm', 'l'); the platform sees it as rpod-<size>."""
+    """model_name: the size ('s', 'm', 'l'); config.json names the model rpod-<size>."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     onnx_path = output_dir / 'model.onnx'

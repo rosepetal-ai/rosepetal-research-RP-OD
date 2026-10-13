@@ -1,7 +1,7 @@
 """Turn whatever `predict` receives into RGB uint8 arrays, without ever modifying the caller's images.
 
 Accepted: a numpy array (H x W, or H x W x 1/3/4) with a color tag, a file path, a folder, or a list of these.
-Only 8-bit images are accepted, like the vision platform.
+Only 8-bit images are accepted, as in production.
 """
 from pathlib import Path
 

@@ -1,4 +1,4 @@
-"""Letterbox exactly as the vision platform's GPU pre-processing (rp_preprocess_cuda.cu, letterbox + antialias).
+"""Letterbox exactly as RP-OD's production GPU pre-processing (a CUDA letterbox kernel with antialias).
 
 Scale = the largest that fits the whole image (upscaling allowed), computed in float32; resized size rounded down;
 image centered (odd pixel to the bottom/right); padding 114; bilinear resampling with half-pixel centers and

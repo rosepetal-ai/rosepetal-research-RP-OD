@@ -2,10 +2,11 @@
 validation curves, loss, learning rate, and the official COCO numbers once they exist.
 
 Runs next to the training (same machine), rewrites the page every minute; the page reloads itself every minute too.
-Served by Jupyter at  http://localhost:8890/files/dashboard/index.html?token=<token>  (through the SSH tunnel).
+Open the page with any web server over the output folder (or a Jupyter server: /files/dashboard/index.html).
+--work is the folder with the runs/ and logs/ of the training (/work in our training container).
 
-    python dashboard.py --run max_b2                          # --reference <run> adds another run's curve
-    python dashboard.py --run arch_control,arch_A,arch_AC     # a series run one after another: the page follows the
+    python dashboard.py --run rpod_s                          # --reference <run> adds another run's curve
+    python dashboard.py --run rpod_s,rpod_m,rpod_l            # a series run one after another: the page follows the
                                                               # one in progress and compares the curves of all
 """
 import argparse
@@ -299,14 +300,14 @@ chart('lr', D.lr, {{title: 'Learning rate per epoch', fmt: v => v.toFixed(2), w:
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
-    p.add_argument('--run', default='max_b2', help='a run, or several separated by commas (a series)')
+    p.add_argument('--run', required=True, help='a run, or several separated by commas (a series)')
     p.add_argument('--reference', default=None, help='another run whose mAP50-95 curve is drawn for comparison')
-    p.add_argument('--work', default='/work')
-    p.add_argument('--out', default='/work/dashboard/index.html')
+    p.add_argument('--work', default='/work', help='folder with runs/ and logs/')
+    p.add_argument('--out', default=None, help='default: <work>/dashboard/index.html')
     p.add_argument('--every', type=int, default=60)
     p.add_argument('--once', action='store_true')
     a = p.parse_args()
-    out = Path(a.out)
+    out = Path(a.out or Path(a.work) / 'dashboard' / 'index.html')
     out.parent.mkdir(parents=True, exist_ok=True)
     while True:
         tmp = out.with_suffix('.tmp')

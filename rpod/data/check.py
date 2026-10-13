@@ -119,7 +119,7 @@ def _check_one(image_path, num_classes):
     except Exception as e:  # noqa: BLE001 - any decoding failure makes the image unusable
         return None, [('error', image_path, f'unreadable image ({type(e).__name__})')]
     if mode not in EIGHT_BIT_MODES:
-        problems.append(('error', image_path, f'not an 8-bit image (mode {mode}); the platform only works with 8 bits'))
+        problems.append(('error', image_path, f'not an 8-bit image (mode {mode}); RP-OD only works with 8 bits'))
     cls, boxes = [], []
     lp = Path(label_path(image_path))
     if lp.exists():
