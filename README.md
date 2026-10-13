@@ -37,7 +37,7 @@ are 256 channels wide in all three.
 
 ```python
 model = RPOD('m')
-res = model.train('parts.yaml', imgsz=640, epochs=150, patience=20, batch=4, augment=None)
+res = model.train('parts.yaml', imgsz=640, epochs=150, patience=20, batch=4)
 res['val'].map50_95, res['val'].recall, res['val'].threshold      # final metrics of the best epoch
 model.predict(image)                                                # the object is now the best model
 ```
@@ -62,6 +62,24 @@ fixed (adjusted with experiments on a real dataset):
 Why these values: on a real dataset (77 training images), a backbone learning rate of 1e-4 instead of the usual
 1e-5 gave +0.12 mAP50-95 on validation, and batch 4 instead of 8 another +0.06 (confirmed with three seeds).
 Removing the flat phase, gradient clipping 10, weight decay 1e-3 and 300 epochs did not help.
+
+Training images are augmented by default with the recipe of the COCO pretraining (`rpod.data.augment`), before the
+letterbox. Its phases are fractions of the training, so they scale with `epochs`, and they follow the real end when
+`patience` brings it forward:
+
+| Epochs | Augmentation (probability) |
+|---|---|
+| first 25 % | mosaic of 4 training images (0.5) |
+| all but the last 4 % | brightness / contrast / saturation / hue (0.5), zoom-out up to 4x (0.5, not after a mosaic), crop that keeps objects (0.8), horizontal flip (0.5) |
+| last 4 % (at least one) | none: training ends on clean images |
+
+```python
+model.train('parts.yaml', augment=None)          # no augmentation
+model.train('parts.yaml', augment=my_augment)    # your own function (contract under Datasets)
+
+import rpod.data.augment as A
+A.P_FLIP = 0.0                                   # change one value of the default recipe, e.g. no flips
+```
 
 Optional multi-scale training, off by default:
 
@@ -126,7 +144,7 @@ recommended during validation. `export` fuses the neck for inference and checks 
 | Part | State |
 |---|---|
 | Model, configuration, `info`, `predict`, `export` | done |
-| Data: YOLO format, dataset check with cache, augmentation hook | done |
+| Data: YOLO format, dataset check with cache, default augmentation (replaceable) | done |
 | Training, validation metrics and plots | done |
 | `rpod` branch in the vision platform (Triton) | next |
 
@@ -142,20 +160,20 @@ from rpod.data import check_dataset
 ds = check_dataset('parts.yaml')      # raises with the full list of errors; returns stats and warnings
 ```
 
-There is no augmentation inside RP-OD. An external library plugs in with one function, applied to training
-samples before the letterbox (see `rpod/data/dataset.py` for the full contract):
+The default augmentation can be replaced by any function, for example one built on an augmentation library, applied
+to training samples before the letterbox (see `rpod/data/dataset.py` for the full contract):
 
 ```python
 def augment(sample, ctx):
     # sample.image uint8 RGB, sample.boxes xyxy pixels, sample.labels, sample.path
-    # ctx.sample(k), ctx.epoch, ctx.epochs, ctx.imgsz, ctx.rng
+    # ctx.sample(k), ctx.epoch, ctx.epochs (where training ends), ctx.imgsz, ctx.rng
     return sample
 ```
 
 ## COCO benchmark and pretraining
 
 `benchmarks/coco/` trains and evaluates RP-OD on COCO 2017 with the protocol of the papers (AP with pycocotools,
-640×640), using the standard augmentations through the hook. The model it trains also serves as pretrained weights for
+640×640), with the default augmentation. The model it trains also serves as pretrained weights for
 any smaller configuration.
 
 ## Tests

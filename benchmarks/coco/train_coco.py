@@ -1,8 +1,9 @@
 """Train RP-OD on COCO 2017 with the protocol of the papers we compare with. Start it detached; it writes
 runs/train/<name>/ (results.csv after every epoch, weights/best.pt and last.pt) under the current directory.
 
-Protocol: validation at 640x640, 300 queries (the library would take 5x the busiest image, 465 on COCO), augment.py
-(RT-DETR recipe, mosaic in the first quarter of the epochs, off for the last 4 %), multi-scale training (height and
+Protocol: validation at 640x640, 300 queries (the library would take 5x the busiest image, 465 on COCO), the library's
+default augmentation (rpod.data.augment: RT-DETR recipe, mosaic in the first quarter of the epochs, off for the last
+4 %), multi-scale training (height and
 width drawn separately per batch: 320-960 in the first quarter, 480-800 until the last sixth, then 640), the full
 schedule (patience never brings the final decay forward), the learning
 rate decaying over the second half (--final-fraction 0.5: flat for 80 % of a 72-epoch run left the model on a plateau
@@ -20,11 +21,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # the RP-OD repo, so it runs without installing
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import rpod.data.augment as augment_module  # noqa: E402
 import rpod.engine.trainer as trainer  # noqa: E402
-import augment as augment_module  # noqa: E402
-from augment import augment  # noqa: E402
 from rpod import RPOD  # noqa: E402
 from rpod.cfg.schema import SIZES, from_dict, size_of  # noqa: E402
 
@@ -72,5 +71,5 @@ trainer.RECIPE['mosaic'] = a.mosaic                 # recorded in args.yaml and 
 model = RPOD(a.size)
 if a.init:
     model.net = RPOD(a.init).net      # the trainer loads what fits (fewer levels, blocks or layers) and logs a report
-trainer.train(model, a.data, [640, 640], a.epochs, a.epochs, a.batch, 'cuda', augment, a.name, save_state=True,
-              resume=a.resume, multiscale=bool(a.multiscale))
+trainer.train(model, a.data, [640, 640], a.epochs, a.epochs, a.batch, 'cuda', augment_module.default_augment, a.name,
+              save_state=True, resume=a.resume, multiscale=bool(a.multiscale))

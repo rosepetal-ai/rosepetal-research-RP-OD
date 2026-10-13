@@ -1,6 +1,7 @@
-"""Dataset for training and validation: read -> (optional) augment -> letterbox exactly like production.
+"""Dataset for training and validation: read -> augment (training images) -> letterbox exactly like production.
 
-No augmentation happens here. An external library can plug in through one function, applied to training samples only:
+The augmentation is one function, rpod.data.augment.default_augment unless RPOD.train gets augment=None (none) or
+another function, for example from an augmentation library:
 
     def augment(sample, ctx):
         # sample.image   uint8 RGB [H, W, 3] at original resolution
@@ -8,7 +9,11 @@ No augmentation happens here. An external library can plug in through one functi
         # sample.labels  int [N]
         # sample.path    where it comes from
         # ctx.sample(k)  k more random training samples, read and not augmented (mosaic, mixup, copy-paste...)
-        # ctx.epoch, ctx.epochs, ctx.imgsz ([height, width] the image will be letterboxed into), ctx.rng
+        # ctx.epoch      the current epoch, from 0
+        # ctx.epochs     the epoch where training ends: the epochs asked for, or earlier once patience brings
+        #                the end forward
+        # ctx.imgsz      [height, width] the image will be letterboxed into
+        # ctx.rng        numpy random generator for this sample
         return sample   # any size: the letterbox comes after
 """
 import math
@@ -67,14 +72,23 @@ class DetectionDataset(Dataset):
         """records: from check_dataset. pool: records ctx.sample() draws from (the training split)."""
         self.records, self.imgsz, self.num_classes = records, list(imgsz), num_classes
         self.augment, self.pool = augment, pool if pool is not None else records
-        self.epochs, self.seed, self.id_map = epochs, seed, id_map
-        self._epoch = mp.Value('i', 0)   # shared with the dataloader workers
+        self.seed, self.id_map = seed, id_map
+        self._epoch = mp.Value('i', 0)           # shared with the dataloader workers
+        self._epochs = mp.Value('i', epochs)     # the end of training, which patience can bring forward
 
     def __len__(self):
         return len(self.records)
 
     def set_epoch(self, epoch):
         self._epoch.value = int(epoch)
+
+    @property
+    def epochs(self):
+        return self._epochs.value
+
+    def set_epochs(self, epochs):
+        """The epoch where training now ends (augmentations scale their phases with it)."""
+        self._epochs.value = int(epochs)
 
     def ground_truth(self, i):
         """Boxes xyxy in pixels of the original image and model class ids, without reading the image."""
@@ -102,7 +116,8 @@ class DetectionDataset(Dataset):
             epoch = self._epoch.value
             worker = get_worker_info()
             rng = np.random.default_rng([self.seed, epoch, worker.id if worker else 0, i])
-            sample = self._checked(self.augment(sample, AugmentContext(self, epoch, self.epochs, size, rng)), record)
+            sample = self._checked(self.augment(sample, AugmentContext(self, epoch, self._epochs.value, size, rng)),
+                                  record)
         image, geom = letterbox(sample.image, *size)
         scale, _, _, top, left = geom
         out_h, out_w = size

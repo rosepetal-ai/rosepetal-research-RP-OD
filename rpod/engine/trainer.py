@@ -305,6 +305,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
         scaler.load_state_dict(state['scaler'])
         schedule.final_start = state['final_start']
         best_fitness, best_epoch, stale, epoch = state['best_fitness'], state['best_epoch'], state['stale'], state['epoch']
+    train_set.set_epochs(schedule.end)        # the augmentation's phases follow the real end of training
 
     # ---- run folder
     run = Path(state['run']) if state else _run_dir(project, name)
@@ -407,6 +408,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
             log(metrics.table(names))
             if phase == 'flat' and stale >= patience and epoch + 1 < schedule.final_start:
                 schedule.final_start = epoch + 1
+                train_set.set_epochs(schedule.end)
                 log(f'no improvement for {patience} epochs: starting the final learning-rate decay '
                     f'({schedule.final_epochs} epochs, ends at epoch {schedule.end})')
             if save_state:

@@ -14,7 +14,7 @@ from torch.utils.flop_counter import FlopCounterMode
 
 from .cfg.schema import (DEFAULT_SIZE, SIZES, check_input_size, derive, describe, model_config, positions,
                          queries_for, size_of)
-from .data import DetectionDataset, check_dataset, class_map
+from .data import DetectionDataset, check_dataset, class_map, default_augment
 from .engine.exporter import export_onnx
 from .engine.predictor import predict as _predict
 from .engine.trainer import _run_dir, train as _train
@@ -86,15 +86,18 @@ class RPOD:
         return summary
 
     # -------------------------------------------------------------------------------------------- train / validate
-    def train(self, data, imgsz=640, epochs=150, patience=20, batch=4, device=None, augment=None, name='exp',
-              multiscale=False, pretrained=True):
+    def train(self, data, imgsz=640, epochs=150, patience=20, batch=4, device=None, augment=default_augment,
+              name='exp', multiscale=False, pretrained=True):
         """Train on a YOLO dataset (data.yaml). Afterwards this object is the best model (runs/train/<name>/weights/best.pt).
 
         imgsz: int or [height, width], rounded up to multiples of 32; it is the size used in production too.
         epochs / patience: after `patience` epochs without improvement the final learning-rate decay starts early.
         batch: effective batch; if it does not fit in the GPU it is split into accumulation steps (shown in the log).
             4 by default: more optimizer steps per epoch trained clearly better on small datasets.
-        augment: optional function(sample, ctx) -> sample from your augmentation library (training images only).
+        augment: function(sample, ctx) -> sample applied to training images before the letterbox. By default the
+            recipe of the COCO pretraining (rpod.data.augment: mosaic in the first quarter of the epochs, photometric
+            distortion, zoom-out, crop, flip, clean images at the end; phases scale with the epochs). None: no
+            augmentation. Any other function replaces it (contract in rpod.data.dataset).
         multiscale: train every batch at a random size, height and width drawn separately: from 0.5x to 1.5x imgsz in
             the first quarter of the epochs, from 0.75x to 1.25x until the last sixth, then at imgsz; the model learns
             objects at more scales and shapes. Validation and production stay at imgsz.

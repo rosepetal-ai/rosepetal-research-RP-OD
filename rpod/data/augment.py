@@ -1,31 +1,38 @@
-"""COCO training augmentations for the RP-OD augment hook (the library itself has none).
+"""RP-OD's default training augmentation: the recipe of its COCO pretraining, applied to training images before the
+letterbox. RPOD.train uses it unless it gets augment=None (no augmentation) or another function(sample, ctx).
 
-The RT-DETR / D-FINE recipe: photometric distortion, zoom-out, IoU crop and horizontal flip, switched off for the last
-4 % of the epochs (at least one; the same ones where multi-scale training returns to the fixed size) so training ends
-on clean images. A longer clean phase (10 %, 7 of 72 epochs) made the first COCO run overfit: training loss fell
-from 14.5 to 12.0 while validation dropped from 50.6 to 49.8. It runs on the original image, before RP-OD's letterbox, so
-changing the image content is what gives scale variety with a fixed input: zooming out makes the objects smaller on the
-canvas, cropping makes them bigger.
+Every phase is a fraction of ctx.epochs, the epoch where training ends: the `epochs` given to train, or earlier when
+patience starts the final learning-rate decay sooner (the trainer moves ctx.epochs with it). So the recipe scales with
+any number of epochs.
 
-Mosaic with probability P_MOSAIC (YOLO, DEIM; train_coco.py --mosaic 0 turns it off), only in the first
-MOSAIC_FRACTION of the epochs, the same ones where multi-scale training uses its widest range (DEIM keeps mosaic for
+  first MOSAIC_FRACTION (25 %)   mosaic with probability P_MOSAIC (0.5)
+  every epoch but the last 4 %   photometric distortion 0.5, zoom-out 0.5 (not after a mosaic), IoU crop 0.8, flip 0.5
+  last NO_AUG_FRACTION (4 %)     clean images, at least one epoch (the same ones where multi-scale returns to imgsz)
+
+The values are module attributes: `import rpod.data.augment as A; A.P_FLIP = 0.0` changes them for every run.
+
+The RT-DETR / D-FINE recipe: photometric distortion, zoom-out, IoU crop and horizontal flip, with a short clean phase
+at the end. A longer clean phase (10 %, 7 of 72 epochs) made the first COCO run overfit: training loss fell from 14.5
+to 12.0 while validation dropped from 50.6 to 49.8. It runs on the original image, before RP-OD's letterbox, so
+changing the image content is what gives scale variety with a fixed input: zooming out makes the objects smaller on
+the canvas, cropping makes them bigger.
+
+Mosaic (YOLO, DEIM) only early on, the same epochs where multi-scale training uses its widest range (DEIM keeps it for
 the first half): four training images in a 2x2 grid around a random centre, on a canvas twice the model input, so
-objects arrive at about half their size: more small objects and more context per image. After a mosaic come the
-photometric distortion, the IoU crop and the flip, not the zoom-out (the objects are already halved). In 6-epoch COCO
-fine-tunes it was the only change that helped at 640: +0.3 AP, +0.4 AP small.
+objects arrive at about half their size: more small objects, more objects and more context per image. After a mosaic
+come the photometric distortion, the IoU crop and the flip, not the zoom-out (the objects are already halved). In
+6-epoch COCO fine-tunes it was the only change that helped at 640: +0.3 AP, +0.4 AP small.
 
 Differences with the RT-DETR pipeline: the image is letterboxed (aspect ratio kept, like YOLO and like production)
-instead of stretched to 640x640, and the zoom-out fill is the letterbox gray. Multi-scale input sizes come from the
-trainer (on in train_coco.py: height and width drawn separately, 320-960 in the first quarter, 480-800 until the last
-sixth, then 640).
+instead of stretched, and the zoom-out fill is the letterbox gray.
 """
 import numpy as np
 from PIL import Image, ImageEnhance
 
-from rpod.data.dataset import Sample
+from .dataset import Sample
 
 P_PHOTOMETRIC, P_ZOOM_OUT, P_IOU_CROP, P_FLIP = 0.5, 0.5, 0.8, 0.5
-P_MOSAIC = 0.5                                       # train_coco.py --mosaic 0 sets 0
+P_MOSAIC = 0.5                                       # benchmarks/coco/train_coco.py --mosaic 0 sets 0
 MOSAIC_FRACTION = 0.25                               # first quarter of the epochs = rpod's widest multi-scale phase
 ZOOM_OUT_MAX = 4.0                                   # canvas up to 4x the image side
 FILL = 114                                           # same gray as the letterbox padding
@@ -34,7 +41,8 @@ CROP_MIN_IOUS = (0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0)  # SSD sampler; 1.0 means "n
 NO_AUG_FRACTION = 0.04                               # = the trainer's clean_fraction
 
 
-def augment(sample, ctx):
+def default_augment(sample, ctx):
+    """function(sample, ctx) -> sample for RPOD.train (see the module docstring)."""
     if ctx.epoch >= ctx.epochs - max(1, round(NO_AUG_FRACTION * ctx.epochs)):
         return sample
     rng = ctx.rng

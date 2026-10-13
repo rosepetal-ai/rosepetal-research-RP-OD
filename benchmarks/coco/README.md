@@ -1,13 +1,12 @@
 # COCO 2017: pretraining and benchmark
 
-Outside the `rpod` package on purpose: the library has no augmentations; this folder brings the standard COCO ones
-through the augment hook.
+Trains with the library's default augmentation (`rpod.data.augment`, the RT-DETR / D-FINE recipe plus mosaic), which
+is also what `RPOD.train` uses on any dataset.
 
 | File | |
 |---|---|
 | `benchmark.ipynb` | Drives everything: data, a look at the augmentations, pilot, full run, curves, official numbers |
 | `prepare_coco.py` | Downloads COCO 2017 and writes it in the layout RP-OD reads (`coco/coco.yaml`) |
-| `augment.py` | RT-DETR / D-FINE augmentations as an `augment(sample, ctx)` function |
 | `train_coco.py` | The COCO pretraining of a size (`--size s`, `m` or `l`), optionally starting from a checkpoint (`--init`) |
 | `eval_coco.py` | AP with pycocotools on the official annotations |
 | `dashboard.py` | Self-refreshing page with the state of a run, or of runs made one after another (`--run a,b,c`): progress, ETA, curves, official numbers; served by Jupyter at `/files/dashboard/index.html` |

@@ -25,6 +25,6 @@ What RP-OD does differently:
 | Learning rate | constant after the warm-up (RT-DETR, D-FINE); flat then cosine down to half (DEIM) | flat for the first half, cosine decay to 5 % over the second |
 | Dense head | supervised on the 300 selected queries | supervised on every position |
 | Not adopted from D-FINE | GELAN neck blocks, decoder attention without value / output projections, gated fusion, location quality estimator, 3 / 6 / 3 points per level | — |
-| Delivery | research code with YAML configs | a library: three sizes, dataset checks, augmentation hook, ONNX + config export for the vision platform (Triton) |
+| Delivery | research code with YAML configs | a library: three sizes, dataset checks, default augmentation (replaceable), ONNX + config export for the vision platform (Triton) |
 
 The diagram `docs/architecture.svg` shows the same lineage next to each block.

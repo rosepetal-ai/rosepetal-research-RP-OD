@@ -70,6 +70,7 @@ def test_train_end_to_end(tmp_path, monkeypatch, capsys):
     assert 1 <= len(rows) <= 3 and {'map50_95', 'recall', 'fitness', 'threshold', 'phase'} <= rows[0].keys()
     args = yaml.safe_load(open(run / 'args.yaml'))
     assert args['micro_batch'] == 2 and args['accumulate'] == 1 and args['classes'] == {0: 'scratch', 1: 'screw', 2: 'label'}
+    assert args['augment'] == 'default_augment'
     for f in ('weights/best.pt', 'weights/last.pt', 'val/pr_curves.png', 'val/confusion_matrix.png', 'val/predictions.jpg',
               'test/metrics.json'):
         assert (run / f).exists(), f
