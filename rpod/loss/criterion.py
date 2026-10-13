@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Losses (training only), as in D-FINE.
 
 - Classification: MAL (DEIM's matchability-aware loss): a matched query learns the score IoU^gamma, with full weight

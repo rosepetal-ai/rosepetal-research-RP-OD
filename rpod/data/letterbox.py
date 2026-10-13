@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Letterbox exactly as RP-OD's production GPU pre-processing (a CUDA letterbox kernel with antialias).
 
 Scale = the largest that fits the whole image (upscaling allowed), computed in float32; resized size rounded down;

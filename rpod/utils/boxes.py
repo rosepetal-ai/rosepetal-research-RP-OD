@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Box helpers. Boxes are normalized to [0, 1]; cxcywh = (center x, center y, width, height)."""
 import torch
 

@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Train RP-OD on COCO 2017 with the protocol of the papers we compare with. Start it detached; it writes
 runs/train/<name>/ (results.csv after every epoch, weights/best.pt and last.pt) under the current directory.
 

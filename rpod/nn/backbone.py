@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Backbone: a timm network with ImageNet weights, returning {level: feature map} (stride = 2^level).
 
 Images come in as float tensors in [0, 1], shape [B, 3, H, W]. The ImageNet normalization the weights expect

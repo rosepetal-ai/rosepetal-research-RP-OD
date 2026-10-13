@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Model sizes and everything derived from them.
 
 RP-OD has three sizes and nothing else to choose: classes come from the dataset and the input size is chosen when

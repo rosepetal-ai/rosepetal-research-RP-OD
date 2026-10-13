@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Query selection (the dense 'YOLO' head) + deformable decoder (the 'DETR' refiner).
 
 Boxes are refined as in D-FINE (Fine-grained Distribution Refinement): after the first decoder layer gives an initial

@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """The COCO numbers of a checkpoint as papers report them: pycocotools on the official instances_val2017.json (crowd
 regions ignored, up to 100 detections per image, AP by object size).
 

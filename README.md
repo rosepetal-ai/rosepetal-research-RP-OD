@@ -202,8 +202,9 @@ python3 -m pytest tests -q
 RP-OD is available under a dual licensing model:
 
 - **Open Source License:** [GNU AGPLv3](LICENSE).
-- **Commercial License:** available upon request for organizations requiring alternative licensing terms.
+- **Commercial License:** the Rosepetal Enterprise License, available upon request for organizations requiring
+  alternative licensing terms.
 
 For commercial licensing inquiries, please contact licensing@rosepetal.ai.
 
-Copyright 2026 Rosepetal. The ideas RP-OD builds on, and their papers, are listed in `docs/ORIGINS.md`.
+Copyright (C) 2026 Rosepetal AI. The ideas RP-OD builds on, and their papers, are listed in `docs/ORIGINS.md`.

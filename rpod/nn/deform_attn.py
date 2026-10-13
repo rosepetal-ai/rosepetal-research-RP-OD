@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Multi-scale deformable attention, pure PyTorch (bilinear sampling with F.grid_sample).
 
 No custom CUDA op: runs on CPU/GPU and exports to ONNX (opset >= 16 for grid_sample).

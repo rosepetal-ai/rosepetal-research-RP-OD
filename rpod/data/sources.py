@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Turn whatever `predict` receives into RGB uint8 arrays, without ever modifying the caller's images.
 
 Accepted: a numpy array (H x W, or H x W x 1/3/4) with a color tag, a file path, a folder, or a list of these.

@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """A self-refreshing web page with the state of a training run: epoch, progress inside the epoch, estimated end,
 validation curves, loss, learning rate, and the official COCO numbers once they exist.
 

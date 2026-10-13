@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Where small objects get lost, measured inside a trained model on COCO val2017 (no training).
 
 1. Query selection: does one of the K candidates the decoder starts from cover each object (IoU >= 0.5)? Compared with

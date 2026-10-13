@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Detection metrics, all in original image pixels.
 
 - mAP50-95 and mAP50: the COCO definition (greedy matching by score, 101 recall points, up to 100 detections per

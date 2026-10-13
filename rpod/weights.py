@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """COCO-pretrained weights of each size: release files of the RP-OD repository, downloaded the first time a model of
 that size is trained and cached in ~/.cache/rpod (the RPOD_CACHE environment variable moves it).
 

@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Prediction: letterbox -> network -> top detections -> boxes back in original image coordinates. No NMS.
 
 Post-processing, the same a serving pipeline applies to the exported model: sigmoid, top-k over queries x classes,

@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Neck (hybrid encoder): input projection -> global attention on the coarsest level -> FPN + PAN fusion.
 
 Modules are keyed by feature level ('p3', 'p4', 'p5'), so every neck size shares the same names and a pretrained

@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """RP-OD's default training augmentation: the recipe of its COCO pretraining, applied to training images before the
 letterbox. RPOD.train uses it unless it gets augment=None (no augmentation) or another function(sample, ctx).
 

@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Validation: run the model on a dataset split and compute the metrics (optionally the plots).
 
 Detections go through the same post-processing as predict() (top 100 per image) and are compared with the ground

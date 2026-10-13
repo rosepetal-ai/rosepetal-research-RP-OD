@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Training with one fixed recipe (RT-DETR / D-FINE / DEIM practice). The user chooses data, size, epochs, patience,
 batch, device and an optional augmentation function; everything else is decided here.
 

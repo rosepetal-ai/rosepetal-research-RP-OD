@@ -1,3 +1,6 @@
+# RP-OD - Copyright (C) 2026 Rosepetal AI
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Rosepetal-Enterprise-License
+# See LICENSE for licensing terms and commercial inquiries.
 """Download COCO 2017 and lay it out the way RP-OD reads datasets.
 
     <root>/images/train2017, images/val2017     official jpgs
