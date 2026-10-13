@@ -8,6 +8,44 @@ probability distribution that every decoder layer sharpens, and the last layer t
 
 Everything is used from Python through one object, `RPOD`.
 
+## Fine-tuning comparison (preliminary test)
+
+> **Preliminary test.** These numbers come from a single small dataset and are only a first check of the comparison
+> protocol. A full study over many datasets will follow, and its results may differ from the ones below.
+
+RP-OD is built to be fine-tuned on small custom datasets. This first test uses one dataset of the RF100-VL benchmark
+(`dataconvert`: 125 training images, 35 validation, 19 test, 1 class): each model fine-tuned out of the box from its
+COCO weights, 3 seeds each.
+
+![Accuracy vs. latency after fine-tuning](docs/images/finetune_accuracy_vs_latency.png)
+
+![Test mAP50-95 after fine-tuning](docs/images/finetune_map_ranking.png)
+
+| Model | Test mAP50-95 | Test F1 | TensorRT FP16 | TensorRT FP32 | Input | Parameters |
+|---|---|---|---|---|---|---|
+| **RP-OD `s`** | **90.5 ± 0.9** | 93.9 | 0.85 ms | 1.53 ms | 640 | 9.7 M |
+| DEIMv2-S | 90.2 ± 0.6 | 93.2 | 1.36 ms | 3.14 ms | 640 | 9.7 M |
+| DEIM-D-FINE-S | 90.0 ± 0.4 | 93.9 | 1.02 ms | 1.71 ms | 640 | 10.2 M |
+| RF-DETR-S | 89.5 ± 0.2 | 93.9 | 0.93 ms | 2.20 ms | 512 | 31.8 M |
+| YOLO11s | 86.4 ± 0.3 | 93.6 | 0.71 ms + NMS | 1.39 ms + NMS | 640 | 9.4 M |
+| D-FINE-S | 86.3 ± 2.1 | 88.6 | 0.98 ms | 1.67 ms | 640 | 10.2 M |
+| YOLO26s | 85.6 ± 0.5 | 92.3 | 0.77 ms | 1.47 ms | 640 | 9.9 M |
+
+How it was measured:
+
+- **Training**, each model with its own recipe and augmentations: RP-OD with the library defaults; YOLO with the
+  Ultralytics defaults (100 epochs, batch 16, the RF100-VL protocol); D-FINE, DEIM and DEIMv2 with their official
+  configs (augmentations, multi-scale, mixup where they use it) over 100 epochs at batch 16; RF-DETR with its defaults
+  (100 epochs, batch 4 × 4, 512 px).
+- **Evaluation**, the same for all: after every epoch the weights each framework validates predict the validation and
+  test images, scored with pycocotools-equivalent mAP; each run counts with its epoch of best validation mAP50-95, and
+  F1 uses the confidence threshold with the best F1 on validation.
+- **Latency**: each model's deployment ONNX, TensorRT engine, RTX 4090, batch 1, median of 500 runs. All are NMS-free
+  except YOLO11s, whose NMS comes on top of the time shown.
+- One small dataset is not a verdict: the full study, the same comparison over many RF100-VL datasets, comes next.
+
+![Test mAP50-95 per epoch](docs/images/finetune_learning_curves.png)
+
 ## Install
 
 Python 3.10 or newer, PyTorch 2.1 or newer.
