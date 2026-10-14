@@ -31,19 +31,19 @@ COCO weights, 3 seeds each.
 | D-FINE-S | 86.3 ± 2.1 | 94.4 | 88.6 | 0.5 | 640 | 10.2 M |
 | YOLO26s | 85.6 ± 0.5 | 95.6 | 92.3 | 0.6 | 640 | 9.9 M |
 
-Inference time, TensorRT, batch 1 (GPU time per image, median, without host-device copies):
+Inference time, TensorRT, batch 1, FP16 / FP32 (GPU time per image, median, without host-device copies):
 
-| Model | Input | RTX 4090 FP16 | RTX 4090 FP32 | RTX 3060 FP16 | RTX 3060 FP32 |
-|---|---|---|---|---|---|
-| **RP-OD `s`** | 640 × 640 | 0.85 ms | 1.53 ms | 2.60 ms | 5.44 ms |
-| D-FINE-S | 640 × 640 | 0.98 ms | 1.67 ms | 2.80 ms | 6.20 ms |
-| DEIM-D-FINE-S | 640 × 640 | 1.02 ms | 1.71 ms | 2.84 ms | 6.24 ms |
-| RF-DETR-S | 512 × 512 | 0.93 ms | 2.20 ms | 3.23 ms | 9.85 ms |
-| DEIMv2-S | 640 × 640 | 1.36 ms | 3.14 ms | 4.08 ms | 13.78 ms |
-| YOLO26s | 640 × 640 | 0.77 ms | 1.47 ms | 1.80 ms | 4.39 ms |
-| YOLO11s | 640 × 640 | 0.71 ms + NMS | 1.39 ms + NMS | 1.73 ms + NMS | 4.28 ms + NMS |
-| **RP-OD `s`** | 640 × 1568 | 1.25 ms | 2.41 ms | 4.85 ms | 11.38 ms |
-| YOLO26s | 640 × 1568 | 1.10 ms | 2.20 ms | 4.05 ms | 10.14 ms |
+| Model | Input | RTX 4090 | RTX 3060 | RTX 2060 |
+|---|---|---|---|---|
+| **RP-OD `s`** | 640 × 640 | 0.85 / 1.53 ms | 2.60 / 5.44 ms | 3.97 / 8.54 ms |
+| D-FINE-S | 640 × 640 | 0.98 / 1.67 ms | 2.80 / 6.20 ms | 3.59 / 9.77 ms |
+| DEIM-D-FINE-S | 640 × 640 | 1.02 / 1.71 ms | 2.84 / 6.24 ms | 3.69 / 9.77 ms |
+| RF-DETR-S | 512 × 512 | 0.93 / 2.20 ms | 3.23 / 9.85 ms | 4.94 / 19.19 ms |
+| DEIMv2-S | 640 × 640 | 1.36 / 3.14 ms | 4.08 / 13.78 ms | 5.45 / 23.46 ms |
+| YOLO26s | 640 × 640 | 0.77 / 1.47 ms | 1.80 / 4.39 ms | 2.35 / 6.75 ms |
+| YOLO11s | 640 × 640 | 0.71 / 1.39 ms + NMS | 1.73 / 4.28 ms + NMS | 2.27 / 6.59 ms + NMS |
+| **RP-OD `s`** | 640 × 1568 | 1.25 / 2.41 ms | 4.85 / 11.38 ms | 6.86 / 18.77 ms |
+| YOLO26s | 640 × 1568 | 1.10 / 2.20 ms | 4.05 / 10.14 ms | 5.34 / 16.89 ms |
 
 640 × 1568 is the input of a wide industrial camera (2452 × 1000 images) at the same object scale as 640 × 640.
 
@@ -57,9 +57,9 @@ How it was measured:
   test images, scored with pycocotools-equivalent mAP; each run counts with its epoch of best validation mAP50-95, and
   F1 uses the confidence threshold with the best F1 on validation.
 - **Inference time**: each model's deployment ONNX, a TensorRT engine built on the GPU itself, batch 1; RTX 4090 with
-  TensorRT 10.15 (median of 500 runs), RTX 3060 with TensorRT 10.9 and `trtexec` (median of 1000 runs). All the models
-  are NMS-free except YOLO11s, whose NMS comes on top of the time shown. The accuracy-vs-speed chart uses the
-  RTX 4090 FP16 column.
+  TensorRT 10.15 (median of 500 runs), RTX 3060 and RTX 2060 with TensorRT 10.9 and `trtexec` (median of 1000 runs).
+  All the models are NMS-free except YOLO11s, whose NMS comes on top of the time shown. The accuracy-vs-speed chart
+  uses the RTX 4090 FP16 column.
 - One small dataset is not a verdict: the full study, the same comparison over many RF100-VL datasets, comes next.
 
 ![Test mAP50-95 per epoch](docs/images/finetune_learning_curves.png)
