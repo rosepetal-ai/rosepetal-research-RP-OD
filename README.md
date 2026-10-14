@@ -21,15 +21,31 @@ COCO weights, 3 seeds each.
 
 ![Test mAP50-95 after fine-tuning](docs/images/finetune_map_ranking.png)
 
-| Model | Test mAP50-95 | Test F1 | TensorRT FP16 | TensorRT FP32 | Input | Parameters |
+| Model | Test mAP50-95 | Test mAP50 | Test F1 | FP / image | Input | Parameters |
 |---|---|---|---|---|---|---|
-| **RP-OD `s`** | **90.5 ± 0.9** | 93.9 | 0.85 ms | 1.53 ms | 640 | 9.7 M |
-| DEIMv2-S | 90.2 ± 0.6 | 93.2 | 1.36 ms | 3.14 ms | 640 | 9.7 M |
-| DEIM-D-FINE-S | 90.0 ± 0.4 | 93.9 | 1.02 ms | 1.71 ms | 640 | 10.2 M |
-| RF-DETR-S | 89.5 ± 0.2 | 93.9 | 0.93 ms | 2.20 ms | 512 | 31.8 M |
-| YOLO11s | 86.4 ± 0.3 | 93.6 | 0.71 ms + NMS | 1.39 ms + NMS | 640 | 9.4 M |
-| D-FINE-S | 86.3 ± 2.1 | 88.6 | 0.98 ms | 1.67 ms | 640 | 10.2 M |
-| YOLO26s | 85.6 ± 0.5 | 92.3 | 0.77 ms | 1.47 ms | 640 | 9.9 M |
+| **RP-OD `s`** | **90.5 ± 0.9** | 97.7 | 93.9 | 0.6 | 640 | 9.7 M |
+| DEIMv2-S | 90.2 ± 0.6 | 97.1 | 93.2 | 0.6 | 640 | 9.7 M |
+| DEIM-D-FINE-S | 90.0 ± 0.4 | 98.0 | 93.9 | 0.3 | 640 | 10.2 M |
+| RF-DETR-S | 89.5 ± 0.2 | 98.1 | 93.9 | 0.5 | 512 | 31.8 M |
+| YOLO11s | 86.4 ± 0.3 | 96.0 | 93.6 | 0.5 | 640 | 9.4 M |
+| D-FINE-S | 86.3 ± 2.1 | 94.4 | 88.6 | 0.5 | 640 | 10.2 M |
+| YOLO26s | 85.6 ± 0.5 | 95.6 | 92.3 | 0.6 | 640 | 9.9 M |
+
+Inference time, TensorRT, batch 1 (GPU time per image, median, without host-device copies):
+
+| Model | Input | RTX 4090 FP16 | RTX 4090 FP32 | RTX 3060 FP16 | RTX 3060 FP32 |
+|---|---|---|---|---|---|
+| **RP-OD `s`** | 640 × 640 | 0.85 ms | 1.53 ms | 2.60 ms | 5.44 ms |
+| D-FINE-S | 640 × 640 | 0.98 ms | 1.67 ms | 2.80 ms | 6.20 ms |
+| DEIM-D-FINE-S | 640 × 640 | 1.02 ms | 1.71 ms | 2.84 ms | 6.24 ms |
+| RF-DETR-S | 512 × 512 | 0.93 ms | 2.20 ms | 3.23 ms | 9.85 ms |
+| DEIMv2-S | 640 × 640 | 1.36 ms | 3.14 ms | 4.08 ms | 13.78 ms |
+| YOLO26s | 640 × 640 | 0.77 ms | 1.47 ms | 1.80 ms | 4.39 ms |
+| YOLO11s | 640 × 640 | 0.71 ms + NMS | 1.39 ms + NMS | 1.73 ms + NMS | 4.28 ms + NMS |
+| **RP-OD `s`** | 640 × 1568 | 1.25 ms | 2.41 ms | 4.85 ms | 11.38 ms |
+| YOLO26s | 640 × 1568 | 1.10 ms | 2.20 ms | 4.05 ms | 10.14 ms |
+
+640 × 1568 is the input of a wide industrial camera (2452 × 1000 images) at the same object scale as 640 × 640.
 
 How it was measured:
 
@@ -40,8 +56,10 @@ How it was measured:
 - **Evaluation**, the same for all: after every epoch the weights each framework validates predict the validation and
   test images, scored with pycocotools-equivalent mAP; each run counts with its epoch of best validation mAP50-95, and
   F1 uses the confidence threshold with the best F1 on validation.
-- **Latency**: each model's deployment ONNX, TensorRT engine, RTX 4090, batch 1, median of 500 runs. All are NMS-free
-  except YOLO11s, whose NMS comes on top of the time shown.
+- **Inference time**: each model's deployment ONNX, a TensorRT engine built on the GPU itself, batch 1; RTX 4090 with
+  TensorRT 10.15 (median of 500 runs), RTX 3060 with TensorRT 10.9 and `trtexec` (median of 1000 runs). All the models
+  are NMS-free except YOLO11s, whose NMS comes on top of the time shown. The accuracy-vs-speed chart uses the
+  RTX 4090 FP16 column.
 - One small dataset is not a verdict: the full study, the same comparison over many RF100-VL datasets, comes next.
 
 ![Test mAP50-95 per epoch](docs/images/finetune_learning_curves.png)
