@@ -164,14 +164,17 @@ def _raise_open_file_limit(target=65536):
         pass
 
 
-def _micro_batch(net, criterion, batch, imgsz, device, amp_dtype, max_objects):
-    """Largest divisor of `batch` whose forward + backward fits in GPU memory. The weights are left untouched."""
+def _micro_batch(net, criterion, batch, imgsz, device, amp_dtype, max_objects, headroom=0.8):
+    """Largest divisor of `batch` whose forward + backward peaks under `headroom` of the GPU memory: the margin is
+    for the optimizer, the EMA and the fragmentation that changing image sizes cause. The weights are left untouched."""
     if device.type != 'cuda':
         return batch
     backup = {k: v.clone() for k, v in net.state_dict().items()}
     n = max(1, max_objects)
+    limit = headroom * torch.cuda.get_device_properties(device).total_memory
     for micro in [d for d in range(batch, 0, -1) if batch % d == 0]:
         images = targets = out = None
+        torch.cuda.reset_peak_memory_stats(device)
         try:
             images = torch.rand(micro, 3, *imgsz, device=device)
             targets = [{'labels': torch.zeros(n, dtype=torch.int64, device=device),
@@ -180,7 +183,7 @@ def _micro_batch(net, criterion, batch, imgsz, device, amp_dtype, max_objects):
                 out = net(images, targets)
             criterion(_to_float(out), targets)['loss'].backward()
             torch.cuda.synchronize(device)
-            ok = True
+            ok = torch.cuda.max_memory_allocated(device) <= limit or micro == 1
         except torch.cuda.OutOfMemoryError:
             ok = False
         net.zero_grad(set_to_none=True)
