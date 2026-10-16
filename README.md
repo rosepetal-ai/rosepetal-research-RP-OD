@@ -122,7 +122,7 @@ fixed (adjusted with experiments on a real dataset):
 | | |
 |---|---|
 | Optimizer | AdamW, lr 1e-4 for the whole network including the backbone, weight decay 1e-4 (none on norms, biases, embeddings) |
-| Schedule | warmup, flat, cosine decay over the last 20 % of the epochs; `patience` epochs without improvement start that decay early |
+| Schedule | warmup, flat, cosine decay over the last 20 % of the epochs; `patience` epochs without improvement start that decay early, from the weights of the best epoch |
 | Stability | EMA of the weights (what is validated and saved), gradient clipping 0.1, mixed precision on GPU, no dropout |
 | Losses | classification: matchability-aware (MAL); boxes: L1 + GIoU, and on the edge distributions FGL + self-distillation from the last layer (DDF), on the union of the matches of all layers; on every decoder layer, the denoising queries and the dense head (every position, not only the selected ones) |
 | Batch | `batch` is the effective batch, 4 by default: if it does not fit in the GPU it is split into accumulation steps, shown in the log; backbone BatchNorm is frozen below 8 images per step |
@@ -130,7 +130,9 @@ fixed (adjusted with experiments on a real dataset):
 
 Why these values: on a real dataset (77 training images), a backbone learning rate of 1e-4 instead of the usual
 1e-5 gave +0.12 mAP50-95 on validation, and batch 4 instead of 8 another +0.06 (confirmed with three seeds).
-Removing the flat phase, gradient clipping 10, weight decay 1e-3 and 300 epochs did not help.
+Removing the flat phase, gradient clipping 10, weight decay 1e-3 and 300 epochs did not help. Going back to the
+best epoch's weights for the final decay and for the clean last epochs did not hurt there (test mAP50-95 96.3 → 96.6,
+three seeds each, within the noise) and on COCO added 0.4 AP to the best epoch of size `m`.
 
 Training images are augmented by default with the recipe of the COCO pretraining (`rpod.data.augment`), before the
 letterbox. Its phases are fractions of the training, so they scale with `epochs`, and they follow the real end when
@@ -140,7 +142,7 @@ letterbox. Its phases are fractions of the training, so they scale with `epochs`
 |---|---|
 | first 25 % | mosaic of 4 training images (0.5) |
 | all but the last 4 % | brightness / contrast / saturation / hue (0.5), zoom-out up to 4x (0.5, not after a mosaic), crop that keeps objects (0.8), horizontal flip (0.5) |
-| last 4 % (at least one) | none: training ends on clean images |
+| last 4 % (at least one) | none: training ends on clean images, starting again from the weights of the best epoch (which can still be any epoch, these included) |
 
 ```python
 model.train('parts.yaml', augment=None)          # no augmentation

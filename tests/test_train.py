@@ -9,7 +9,7 @@ import torch
 import yaml
 
 from rpod import RPOD
-from rpod.engine.trainer import RECIPE, Schedule, _param_groups
+from rpod.engine.trainer import RECIPE, ModelEMA, Schedule, _clean_start, _param_groups, _restore_best
 from rpod.loss import SetCriterion
 
 from .conftest import make_net
@@ -122,6 +122,72 @@ def test_multiscale_training_runs(tmp_path, monkeypatch, capsys):
     assert 'multi-scale: epochs 3-3 at 160x160' in out
     assert yaml.safe_load(open(res['dir'] / 'args.yaml'))['multiscale'] is True
     assert m.imgsz == [160, 160] and len(list(csv.DictReader(open(res['dir'] / 'results.csv')))) == 3
+
+
+def test_clean_stretch_follows_the_real_end():
+    assert [_clean_start(end, RECIPE) for end in (120, 150, 60, 10, 3)] == [115, 144, 58, 9, 2]
+
+
+def test_restore_best_puts_back_model_and_ema(tmp_path):
+    best, net = make_net(), make_net()
+    with torch.no_grad():
+        for p in net.parameters():
+            p.add_(1.0)
+    ema = ModelEMA(net, 0.9999, 2000)
+    ema.updates = 500
+    torch.save({'state_dict': best.state_dict()}, tmp_path / 'best.pt')
+    _restore_best(tmp_path / 'best.pt', net, ema)
+    for m in (net, ema.ema):
+        assert all(torch.equal(v, best.state_dict()[k]) for k, v in m.state_dict().items())
+    assert ema.updates == 0                     # the EMA follows what gets trained from the best weights
+
+
+def scripted(monkeypatch, fitness):
+    """Training validation as usual but with these fitness values, epoch after epoch (the last one repeats); every
+    return to the best weights is recorded as (epochs finished, the model now holds best.pt)."""
+    from rpod.engine import trainer as T
+    real_validate, real_restore, done, restores = T.validate, T._restore_best, [], []
+
+    def validate(net, dataset, names, device, batch=16, threshold=None, plots_dir=None, **kwargs):
+        m = real_validate(net, dataset, names, device, batch, threshold, plots_dir, **kwargs)
+        if plots_dir is None:
+            m.fitness = fitness[min(len(done), len(fitness) - 1)]
+            done.append(m.fitness)
+        return m
+
+    def restore(path, net, ema):
+        real_restore(path, net, ema)
+        saved = torch.load(path, map_location='cpu', weights_only=True)['state_dict']
+        restores.append((len(done), all(torch.equal(v.cpu(), saved[k]) for k, v in net.state_dict().items())))
+
+    monkeypatch.setattr(T, 'validate', validate)
+    monkeypatch.setattr(T, '_restore_best', restore)
+    return restores
+
+
+def test_the_clean_last_epochs_start_from_the_best(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv('RPOD_WORKERS', '0')
+    monkeypatch.chdir(tmp_path)
+    data = make_dataset(tmp_path / 'data', {'train': 2, 'val': 1})
+    restores = scripted(monkeypatch, [0.5, 0.9, 0.1])
+    res = RPOD('s').train(data, imgsz=128, epochs=10, patience=100, batch=2, device='cpu', pretrained=False)
+    assert restores == [(9, True)]                      # before the 10th epoch, the last 4 % (at least one)
+    assert 'epochs 10-10: back to the weights of the best epoch (2)' in capsys.readouterr().out
+    assert res['best_epoch'] == 2
+
+
+def test_patience_starts_the_decay_from_the_best(tmp_path, monkeypatch, capsys):
+    """patience 2: no improvement in epochs 3 and 4, so the final decay (2 epochs) starts from epoch 2's weights,
+    and the clean last epoch (the 6th) starts from them again."""
+    monkeypatch.setenv('RPOD_WORKERS', '0')
+    monkeypatch.chdir(tmp_path)
+    data = make_dataset(tmp_path / 'data', {'train': 2, 'val': 1})
+    restores = scripted(monkeypatch, [0.5, 0.9, 0.1])
+    res = RPOD('s').train(data, imgsz=128, epochs=10, patience=2, batch=2, device='cpu', pretrained=False)
+    assert restores == [(4, True), (5, True)]
+    out = capsys.readouterr().out
+    assert 'no improvement for 2 epochs: back to the weights of the best epoch (2), starting the final' in out
+    assert len(list(csv.DictReader(open(res['dir'] / 'results.csv')))) == 6
 
 
 def test_open_file_limit_is_raised_for_dataloader_workers():

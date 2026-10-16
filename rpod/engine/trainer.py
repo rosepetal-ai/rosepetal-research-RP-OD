@@ -5,10 +5,15 @@
 batch, device and an optional augmentation function; everything else is decided here.
 
 Schedule: warmup, then a flat learning rate, then a cosine decay over the last 20 % of the epochs. If validation does
-not improve for `patience` epochs during the flat phase, the final decay starts right away and training ends when it
-is done. The best epoch is the one with the highest 0.5 * mAP50-95 + 0.5 * recall (IoU >= 0.5, at the best-F1
-threshold); its EMA weights and threshold go to best.pt. The test split, if any, is evaluated once at the end with that
-threshold and never used for a decision.
+not improve for `patience` epochs during the flat phase, the final decay starts right away, from the weights of the
+best epoch so far, and training ends when it is done. The last 4 % of the epochs (at least one: the clean images of the
+default augmentation, at imgsz with multi-scale) also start again from the best epoch's weights: they add a little to
+the best epoch, while continuing from weights already past it can only partly recover (COCO, size m: best epoch
+49.0 AP, 49.4 after one clean epoch from it; the run's own last epoch, 48.5).
+
+The best epoch is the one with the highest 0.5 * mAP50-95 + 0.5 * recall (IoU >= 0.5, at the best-F1 threshold); its
+EMA weights and threshold go to best.pt. The test split, if any, is evaluated once at the end with that threshold and
+never used for a decision.
 """
 import contextlib
 import copy
@@ -35,7 +40,7 @@ from .validator import validate
 
 RECIPE = dict(lr=1e-4, backbone_lr=1e-4, weight_decay=1e-4, betas=(0.9, 0.999), warmup_steps=2000, warmup_max_fraction=0.05,
               final_fraction=0.2, final_lr_ratio=0.05, ema_decay=0.9999, ema_tau=2000, clip_grad=0.1,
-              freeze_backbone_bn_below=8, clean_fraction=0.04, seed=0)
+              freeze_backbone_bn_below=8, clean_fraction=0.04, restore_best=True, seed=0)
 PROGRESS_SECONDS = 120      # one progress line this often inside an epoch (none in epochs shorter than this)
 CSV_FIELDS = ['epoch', 'phase', 'lr', 'loss', 'cls', 'bbox', 'giou', 'map50_95', 'map50', 'map_small', 'map_medium',
               'map_large', 'precision', 'recall', 'f1',
@@ -92,6 +97,22 @@ class Schedule:
             return 1.0
         progress = ((epoch - self.final_start) * self.spe + step) / (self.final_epochs * self.spe)
         return self.low + (1 - self.low) * 0.5 * (1 + math.cos(math.pi * min(progress, 1.0)))
+
+
+def _clean_start(end, r):
+    """First epoch of the clean last stretch: the last clean_fraction of the epochs up to where training really ends (at
+    least one), the same rule as rpod.data.augment, so patience moves both together."""
+    return end - max(1, round(r['clean_fraction'] * end))
+
+
+def _restore_best(path, net, ema):
+    """The model and its EMA back to the best epoch's weights (the EMA saved in best.pt). The EMA restarts its warmup,
+    so that it follows what gets trained from there instead of staying on the restored weights; the optimizer keeps its
+    moments."""
+    state_dict = torch.load(path, map_location='cpu', weights_only=True)['state_dict']
+    net.load_state_dict(state_dict)
+    ema.ema.load_state_dict(state_dict)
+    ema.updates = 0
 
 
 def _param_groups(net, r):
@@ -278,7 +299,6 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     log(f'batch {batch} = {micro} images x {accumulate} accumulation step(s)' + (' at the largest size' if sampler else '')
         + (f' · backbone BatchNorm frozen ({micro} images per step < {r["freeze_backbone_bn_below"]})' if freeze_bn else '')
         + f" · precision {str(amp_dtype).replace('torch.', '') if amp_dtype else 'float32'} · device {device}")
-    clean_epochs = max(1, round(r['clean_fraction'] * epochs))
     if sampler:
         start = 0
         for end, hs, ws in sampler.phases:
@@ -337,9 +357,13 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     try:
         while epoch < schedule.end:
             t0 = time.time()
+            clean_start = _clean_start(schedule.end, r)
+            if r['restore_best'] and epoch == clean_start and 0 <= best_epoch < epoch - 1:
+                _restore_best(run / 'weights' / 'best.pt', net, ema)
+                log(f'\nepochs {clean_start + 1}-{schedule.end}: back to the weights of the best epoch ({best_epoch + 1})')
             train_set.set_epoch(epoch)
             if sampler:
-                sampler.epoch, sampler.fixed = epoch, epoch >= schedule.end - clean_epochs
+                sampler.epoch, sampler.fixed = epoch, epoch >= clean_start
             _set_train_mode(net, freeze_bn)
             sums, done, seen, next_report = {}, 0, 0, t0 + PROGRESS_SECONDS
             it = iter(loader)
@@ -415,8 +439,12 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
             if phase == 'flat' and stale >= patience and epoch + 1 < schedule.final_start:
                 schedule.final_start = epoch + 1
                 train_set.set_epochs(schedule.end)
-                log(f'no improvement for {patience} epochs: starting the final learning-rate decay '
-                    f'({schedule.final_epochs} epochs, ends at epoch {schedule.end})')
+                back = r['restore_best'] and best_epoch < epoch
+                if back:
+                    _restore_best(run / 'weights' / 'best.pt', net, ema)
+                log(f'no improvement for {patience} epochs: '
+                    + (f'back to the weights of the best epoch ({best_epoch + 1}), ' if back else '')
+                    + f'starting the final learning-rate decay ({schedule.final_epochs} epochs, ends at epoch {schedule.end})')
             if save_state:
                 tmp = run / 'weights' / 'state.pt.tmp'
                 torch.save({'run': str(run.resolve()), 'epoch': epoch + 1, 'net': net.state_dict(), 'ema': ema.ema.state_dict(),
