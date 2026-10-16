@@ -16,6 +16,7 @@ REPO = 'https://github.com/rosepetal-ai/rosepetal-research-RP-OD'
 # size -> (release tag, file name, sha256); a size missing here has no COCO weights published yet
 PRETRAINED = {
     's': ('rpod-s-coco-v1', 'rpod-s-coco.pt', '41e188351d0dd2924e48cc943d391296de46ecdf6c7b2a04cef8572ce78808f6'),
+    'm': ('rpod-m-coco-v1', 'rpod-m-coco.pt', '7093935d20b794872bf83b539ed62aecf81dd851e50151620920aa7d79ed6fcf'),
 }
 
 

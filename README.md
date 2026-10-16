@@ -113,7 +113,8 @@ as the code (below).
 | Size | Release | COCO val2017 AP (AP50) |
 |---|---|---|
 | `s` | `rpod-s-coco-v1` | 45.1 (62.5) |
-| `m`, `l` | in training: until they are published, training prints that only the backbone is pretrained | |
+| `m` | `rpod-m-coco-v1` | 49.4 (67.1) |
+| `l` | in training: until it is published, training prints that only the backbone is pretrained | |
 
 Only data, input size, epochs, patience, batch, device and the augmentation function are chosen; the recipe is
 fixed (adjusted with experiments on a real dataset):
@@ -217,7 +218,7 @@ logits of every query, with no NMS to add; `config.json` holds the classes, inpu
 | Model, configuration, `info`, `predict`, `export` | done |
 | Data: YOLO format, dataset check with cache, default augmentation (replaceable) | done |
 | Training, validation metrics and plots | done |
-| COCO-pretrained weights | `s` published; `m`, `l` in training |
+| COCO-pretrained weights | `s`, `m` published; `l` in training |
 
 ## Datasets
 
