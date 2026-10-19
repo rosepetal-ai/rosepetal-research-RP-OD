@@ -114,7 +114,7 @@ as the code (below).
 |---|---|---|
 | `s` | `rpod-s-coco-v1` | 45.1 (62.5) |
 | `m` | `rpod-m-coco-v1` | 49.4 (67.1) |
-| `l` | in training: until it is published, training prints that only the backbone is pretrained | |
+| `l` | `rpod-l-coco-v1` | 52.3 (70.1) |
 
 Only data, input size, epochs, patience, batch, device and the augmentation function are chosen; the recipe is
 fixed (adjusted with experiments on a real dataset):
@@ -132,7 +132,8 @@ Why these values: on a real dataset (77 training images), a backbone learning ra
 1e-5 gave +0.12 mAP50-95 on validation, and batch 4 instead of 8 another +0.06 (confirmed with three seeds).
 Removing the flat phase, gradient clipping 10, weight decay 1e-3 and 300 epochs did not help. Going back to the
 best epoch's weights for the final decay and for the clean last epochs did not hurt there (test mAP50-95 96.3 → 96.6,
-three seeds each, within the noise) and on COCO added 0.4 AP to the best epoch of size `m`.
+three seeds each, within the noise) and on COCO, one clean epoch from the best epoch added 0.4 AP to size `m` and
+0.3 to size `l`.
 
 Training images are augmented by default with the recipe of the COCO pretraining (`rpod.data.augment`), before the
 letterbox. Its phases are fractions of the training, so they scale with `epochs`, and they follow the real end when
@@ -220,7 +221,7 @@ logits of every query, with no NMS to add; `config.json` holds the classes, inpu
 | Model, configuration, `info`, `predict`, `export` | done |
 | Data: YOLO format, dataset check with cache, default augmentation (replaceable) | done |
 | Training, validation metrics and plots | done |
-| COCO-pretrained weights | `s`, `m` published; `l` in training |
+| COCO-pretrained weights | `s`, `m`, `l` published |
 
 ## Datasets
 
