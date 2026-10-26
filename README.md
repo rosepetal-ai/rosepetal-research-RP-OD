@@ -153,6 +153,21 @@ import rpod.data.augment as A
 A.P_FLIP = 0.0                                   # change one value of the default recipe, e.g. no flips
 ```
 
+Training for a time instead of a number of epochs:
+
+```python
+res = model.train('parts.yaml', time=30 * 60, epochs=500)   # 30 min for the whole call; at most 500 epochs
+res['planned_epochs'], res['stop_reason']                   # 'TIME_BUDGET_REACHED', 'EPOCHS_COMPLETED' or 'EARLY_STOPPED'
+```
+
+After every epoch rpod measures what an epoch costs (the mean of the last three, without the first) and projects how
+many fit in what is left: the final decay, the clean epochs and the end of the mosaic follow that projection. A phase
+that has started does not move back: the decay can only get shorter and the mosaic does not return. Training stops
+between epochs, never inside one, and only where one clean epoch from the best weights still fits. `reserve=` keeps
+time for what the caller does afterwards (seconds, or a function of the measured stats), `patience=` can be a
+function of the planned epochs, and `final_eval=False` skips the final evaluation on val and test. Not with
+multi-scale.
+
 Optional multi-scale training, off by default:
 
 ```python

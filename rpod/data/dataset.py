@@ -47,9 +47,11 @@ class AugmentError(RuntimeError):
 
 
 class AugmentContext:
-    def __init__(self, dataset, epoch, epochs, imgsz, rng):
+    def __init__(self, dataset, epoch, epochs, imgsz, rng, mosaic_end=None):
+        """mosaic_end: the epoch where the mosaic ended, once a time budget has fixed it (None: follow `epochs`)."""
         self._dataset = dataset
         self.epoch, self.epochs, self.imgsz, self.rng = epoch, epochs, list(imgsz), rng
+        self.mosaic_end = mosaic_end
 
     def sample(self, k=1):
         """k random training samples, read from disk and not augmented."""
@@ -78,6 +80,7 @@ class DetectionDataset(Dataset):
         self.seed, self.id_map = seed, id_map
         self._epoch = mp.Value('i', 0)           # shared with the dataloader workers
         self._epochs = mp.Value('i', epochs)     # the end of training, which patience can bring forward
+        self._mosaic_end = mp.Value('i', -1)     # -1: the mosaic phase follows the end of training
 
     def __len__(self):
         return len(self.records)
@@ -92,6 +95,15 @@ class DetectionDataset(Dataset):
     def set_epochs(self, epochs):
         """The epoch where training now ends (augmentations scale their phases with it)."""
         self._epochs.value = int(epochs)
+
+    @property
+    def mosaic_end(self):
+        return None if self._mosaic_end.value < 0 else self._mosaic_end.value
+
+    def freeze_mosaic_end(self, epoch):
+        """The mosaic has ended at `epoch` and stays ended: with a time budget the end of training can move later, and
+        the mosaic must not come back."""
+        self._mosaic_end.value = int(epoch)
 
     def ground_truth(self, i):
         """Boxes xyxy in pixels of the original image and model class ids, without reading the image."""
@@ -119,7 +131,8 @@ class DetectionDataset(Dataset):
             epoch = self._epoch.value
             worker = get_worker_info()
             rng = np.random.default_rng([self.seed, epoch, worker.id if worker else 0, i])
-            sample = self._checked(self.augment(sample, AugmentContext(self, epoch, self._epochs.value, size, rng)),
+            sample = self._checked(self.augment(sample, AugmentContext(self, epoch, self._epochs.value, size, rng,
+                                                                self.mosaic_end)),
                                   record)
         image, geom = letterbox(sample.image, *size)
         scale, _, _, top, left = geom

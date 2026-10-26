@@ -32,6 +32,7 @@ from torch.utils.data import DataLoader
 
 from ..cfg.schema import check_input_size, derive, from_dict, positions, queries_for, to_dict
 from ..data import DetectionDataset, MultiScaleBatchSampler, check_dataset, collate
+from ..data.augment import MOSAIC_FRACTION
 from ..data.check import format_problems
 from ..loss import HungarianMatcher, SetCriterion
 from ..nn import Detector
@@ -76,15 +77,34 @@ class Schedule:
     """Learning-rate factor per optimizer step: warmup, flat, final cosine decay (which patience can bring forward)."""
 
     def __init__(self, epochs, steps_per_epoch, r):
-        self.spe = steps_per_epoch
+        self.spe, self.r = steps_per_epoch, r
         self.final_epochs = max(1, round(r['final_fraction'] * epochs))
         self.final_start = epochs - self.final_epochs
-        self.warmup = max(1, min(r['warmup_steps'], round(r['warmup_max_fraction'] * epochs * steps_per_epoch)))
+        self.warmup = self._warmup(epochs)
         self.low = r['final_lr_ratio']
+
+    def _warmup(self, epochs):
+        return max(1, min(self.r['warmup_steps'], round(self.r['warmup_max_fraction'] * epochs * self.spe)))
 
     @property
     def end(self):
         return self.final_start + self.final_epochs
+
+    def replan(self, epochs, done):
+        """Time budget, before the final decay: training now ends after `epochs`. The decay keeps its share of them but
+        never starts before `done` (epochs already trained). The warmup only gets shorter: if the step already passed
+        the new one, it ends there."""
+        self.final_epochs = max(1, round(self.r['final_fraction'] * epochs))
+        self.final_start = max(done, epochs - self.final_epochs)
+        self.final_epochs = epochs - self.final_start
+        self.warmup = min(self.warmup, self._warmup(epochs))
+
+    def cut(self, end, done):
+        """Time budget: training ends at `end`, earlier than planned. A decay already running keeps its start and only
+        gets shorter; one that has not started begins at the last epoch."""
+        if self.final_start >= done:
+            self.final_start = min(self.final_start, max(end - 1, done))
+        self.final_epochs = end - self.final_start
 
     def phase(self, epoch):
         return 'final' if epoch >= self.final_start else 'flat'
@@ -103,6 +123,92 @@ def _clean_start(end, r):
     """First epoch of the clean last stretch: the last clean_fraction of the epochs up to where training really ends (at
     least one), the same rule as rpod.data.augment, so patience moves both together."""
     return end - max(1, round(r['clean_fraction'] * end))
+
+
+class Budget:
+    """Training against a time budget (RPOD.train(time=...)): how many epochs fit, measured as the run goes.
+
+    `seconds` counts from `started` (the call to train, so the setup is included) to the end of train. `reserve` is
+    time the caller needs afterwards (seconds, or reserve(stats) -> seconds with the stats below), taken off the budget
+    after every epoch. An epoch costs the mean of the last WINDOW epochs (the first one too, until there are others: it
+    carries the CUDA and worker start-up); clean epochs are measured apart, without augmentation they are cheaper."""
+
+    WINDOW = 3
+
+    def __init__(self, seconds, started, reserve=None, clock=time.time):
+        self.seconds, self.started, self.clock = float(seconds), started, clock
+        self.reserve = reserve if callable(reserve) else (lambda stats, s=float(reserve or 0): s)
+        self.normal, self.clean = [], []
+        self.val_s = self.n_val = self.save_s = 0
+
+    def record(self, seconds, clean, val_s, n_val, save_s):
+        (self.clean if clean else self.normal).append(seconds)
+        self.val_s, self.n_val, self.save_s = val_s, n_val, save_s
+
+    @property
+    def epoch_s(self):
+        times = self.normal[1:] if len(self.normal) > 1 else self.normal or self.clean
+        return sum(times[-self.WINDOW:]) / len(times[-self.WINDOW:])
+
+    @property
+    def clean_s(self):
+        return sum(self.clean) / len(self.clean) if self.clean else self.epoch_s
+
+    @property
+    def stats(self):
+        return {'epoch_s': self.epoch_s, 'val_s': self.val_s, 'n_val': self.n_val,
+                'val_s_per_image': self.val_s / max(self.n_val, 1)}
+
+    def elapsed(self):
+        return self.clock() - self.started
+
+    def remaining(self):
+        """Seconds left for epochs: the budget minus what has run, the caller's reserve and rpod's own close (reload
+        the best weights, adopt them)."""
+        return self.seconds - self.elapsed() - self.reserve(self.stats) - 2 * self.save_s
+
+    def fits(self, normal, clean):
+        return normal * self.epoch_s + clean * self.clean_s <= self.remaining()
+
+    def planned(self, done, cap):
+        """Epochs the whole run can have, from `done` already trained: at least one more, at most `cap`."""
+        more = math.floor(self.remaining() / self.epoch_s) if self.epoch_s > 0 else cap
+        return max(done + 1, min(cap, done + more))
+
+    def overrun(self):
+        """Seconds past the budget the caller left to rpod (negative: time to spare)."""
+        return self.elapsed() - (self.seconds - self.reserve(self.stats))
+
+    def state(self):
+        return {'seconds': self.seconds, 'elapsed': self.elapsed(), 'normal': self.normal, 'clean': self.clean,
+                'val_s': self.val_s, 'n_val': self.n_val, 'save_s': self.save_s}
+
+    def load(self, state):
+        """Continue a resumed run with what was left of its budget."""
+        self.started = self.clock() - state['elapsed']
+        self.normal, self.clean = list(state['normal']), list(state['clean'])
+        self.val_s, self.n_val, self.save_s = state['val_s'], state['n_val'], state['save_s']
+
+
+def _fit_to_budget(budget, schedule, done, cap, clean_from):
+    """After an epoch, in time mode: move the end of training to what fits. Stops only at an epoch boundary, and only
+    after an epoch that leaves room for one clean epoch; started phases never move (the decay can only get shorter, the
+    clean stretch can only end sooner)."""
+    if done >= schedule.end:
+        return
+    if clean_from is not None and done > clean_from:            # in the clean stretch: one more if it fits
+        if not budget.fits(0, 1):
+            schedule.cut(done, done)
+        return
+    if not budget.fits(1, 1):          # no room for another epoch and the clean one after it: the next is the last
+        schedule.cut(done + 1 if budget.fits(0, 1) else done, done)
+        return
+    planned = budget.planned(done, cap)
+    if done > schedule.final_start:                             # the decay has started: it can only get shorter
+        if planned < schedule.end:
+            schedule.cut(planned, done)
+    else:
+        schedule.replan(planned, done)
 
 
 def _restore_best(path, net, ema):
@@ -234,8 +340,19 @@ def _run_dir(project, name):
 
 
 def train(model, data, imgsz, epochs, patience, batch, device, augment, name, project='runs/train', workers=None,
-          save_state=False, resume=None, multiscale=False):
-    """Trains `model` (an RPOD) in place and returns {'dir', 'best_epoch', 'val', 'test'}.
+          save_state=False, resume=None, multiscale=False, budget=None, final_eval=True):
+    """Trains `model` (an RPOD) in place and returns {'dir', 'best_epoch', 'val', 'test', 'planned_epochs',
+    'stop_reason', 'budget_overrun_s'}.
+
+    patience: epochs without improvement before the final decay starts early; None never; a function
+    patience(planned_epochs) -> int is evaluated again whenever the end of training moves.
+
+    budget: a Budget, to train for a time instead of a number of epochs (`epochs` is then the most it may train). After
+    every epoch the run is replanned to the epochs that fit: the decay, the clean stretch and the end of the mosaic
+    follow, but once a phase has started it does not move back. Not with multiscale.
+
+    final_eval: evaluate the best weights on val and test (with plots) at the end. False: only reload and adopt them
+    ('val' and 'test' are None), for a caller that evaluates on its own.
 
     multiscale: every batch at a random size, height and width drawn separately (letterboxed from the original
     images): from 0.5x to 1.5x imgsz in the first quarter of the epochs, from 0.75x to 1.25x until the last sixth, then
@@ -246,6 +363,8 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     that gets interrupted can continue with resume=<that file> and the same arguments. Not part of RPOD.train.
     """
     r = RECIPE
+    if budget is not None and multiscale:
+        raise ValueError('a time budget does not support multiscale yet: its phases are fixed when training starts')
     state = torch.load(resume, map_location='cpu', weights_only=True) if resume else None
     if state and from_dict(state['args']['model']) != model.cfg:
         raise ValueError(f'{resume} is a run of another model configuration')
@@ -331,13 +450,22 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
         scaler.load_state_dict(state['scaler'])
         schedule.final_start = state['final_start']
         best_fitness, best_epoch, stale, epoch = state['best_fitness'], state['best_epoch'], state['stale'], state['epoch']
+    clean_from, early = None, False           # clean_from: first clean epoch, fixed once it has started
+    if state and budget is not None:
+        schedule.final_epochs, schedule.warmup = state['final_epochs'], state['warmup']
+        clean_from = state['clean_from']
+        if state['mosaic_end'] is not None:
+            train_set.freeze_mosaic_end(state['mosaic_end'])
+        budget.load(state['budget'])
     train_set.set_epochs(schedule.end)        # the augmentation's phases follow the real end of training
 
     # ---- run folder
     run = Path(state['run']) if state else _run_dir(project, name)
     if not state:
         (run / 'weights').mkdir()
-    args = {'data': str(Path(data).resolve()), 'imgsz': list(imgsz), 'epochs': epochs, 'patience': patience, 'batch': batch,
+    args = {'data': str(Path(data).resolve()), 'imgsz': list(imgsz), 'epochs': epochs,
+            'patience': getattr(patience, '__name__', 'function') if callable(patience) else patience,
+            'time': budget.seconds if budget is not None else None, 'batch': batch,
             'device': str(device), 'augment': getattr(augment, '__name__', None) if augment else None, 'name': run.name,
             'model': to_dict(model.cfg), 'classes': names, 'num_queries': num_queries, 'micro_batch': micro,
             'accumulate': accumulate, 'backbone_bn_frozen': freeze_bn, 'multiscale': bool(multiscale), 'recipe': {k: list(v) if isinstance(v, tuple) else v
@@ -357,13 +485,16 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     try:
         while epoch < schedule.end:
             t0 = time.time()
-            clean_start = _clean_start(schedule.end, r)
-            if r['restore_best'] and epoch == clean_start and 0 <= best_epoch < epoch - 1:
+            if clean_from is None and epoch >= _clean_start(schedule.end, r):
+                clean_from = epoch
+            if r['restore_best'] and epoch == clean_from and 0 <= best_epoch < epoch - 1:
                 _restore_best(run / 'weights' / 'best.pt', net, ema)
-                log(f'\nepochs {clean_start + 1}-{schedule.end}: back to the weights of the best epoch ({best_epoch + 1})')
+                log(f'\nepochs {clean_from + 1}-{schedule.end}: back to the weights of the best epoch ({best_epoch + 1})')
+            if budget is not None and train_set.mosaic_end is None and epoch >= round(MOSAIC_FRACTION * schedule.end):
+                train_set.freeze_mosaic_end(epoch)   # the end of the mosaic stays put if the projection grows later
             train_set.set_epoch(epoch)
             if sampler:
-                sampler.epoch, sampler.fixed = epoch, epoch >= clean_start
+                sampler.epoch, sampler.fixed = epoch, clean_from is not None and epoch >= clean_from
             _set_train_mode(net, freeze_bn)
             sums, done, seen, next_report = {}, 0, 0, t0 + PROGRESS_SECONDS
             it = iter(loader)
@@ -410,7 +541,9 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                                   seen, time.time() - t0))
             means = {k: float(v) / max(done, 1) for k, v in sums.items()}   # per optimizer step (effective batch)
 
+            t_val = time.time()
             metrics = validate(ema.ema, val_set, names, device, micro, workers=workers, amp_dtype=amp_dtype)
+            val_s = time.time() - t_val
             phase = schedule.phase(epoch)
             improved = metrics.fitness > best_fitness
             if improved:
@@ -419,9 +552,16 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                                 metrics.threshold, {**metrics.to_dict(), 'epoch': epoch + 1}, extra)
             elif phase == 'flat':
                 stale += 1
+            t_save = time.time()
             save_checkpoint(run / 'weights' / 'last.pt', ema.ema, model.cfg, names, imgsz, num_queries,
                             metrics.threshold, {**metrics.to_dict(), 'epoch': epoch + 1}, extra)
+            save_s = time.time() - t_save
             seconds = time.time() - t0
+            if budget is not None:     # replan before the log, so that 'epoch N/E' shows the current projection
+                budget.record(seconds, clean_from is not None and epoch >= clean_from, val_s, len(val_set), save_s)
+                before = schedule.end
+                _fit_to_budget(budget, schedule, epoch + 1, epochs, clean_from)
+                train_set.set_epochs(schedule.end)
             writer.writerow({'epoch': epoch + 1, 'phase': phase, 'lr': float(f"{factor * r['lr']:.4g}"),
                              **{k: round(v, 5) for k, v in means.items()},
                              **{k: round(v, 5) for k, v in metrics.to_dict().items()}, 'best': int(improved),
@@ -436,21 +576,29 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                                                      (('small', metrics.map_small), ('medium', metrics.map_medium),
                                                       ('large', metrics.map_large))))
             log(metrics.table(names))
-            if phase == 'flat' and stale >= patience and epoch + 1 < schedule.final_start:
-                schedule.final_start = epoch + 1
+            wait = patience(schedule.end) if callable(patience) else patience
+            if phase == 'flat' and wait is not None and stale >= wait and epoch + 1 < schedule.final_start:
+                schedule.final_start, early = epoch + 1, True
                 train_set.set_epochs(schedule.end)
                 back = r['restore_best'] and best_epoch < epoch
                 if back:
                     _restore_best(run / 'weights' / 'best.pt', net, ema)
-                log(f'no improvement for {patience} epochs: '
+                log(f'no improvement for {wait} epochs: '
                     + (f'back to the weights of the best epoch ({best_epoch + 1}), ' if back else '')
                     + f'starting the final learning-rate decay ({schedule.final_epochs} epochs, ends at epoch {schedule.end})')
+            if budget is not None:
+                log(f'time: {budget.remaining() / 60:.1f} min left for epochs, ~{budget.epoch_s:.0f}s each · '
+                    f'training ends at epoch {schedule.end}' + (f' (was {before})' if schedule.end != before else ''))
+                if epoch + 1 == 1 and schedule.end == 1:
+                    log('warning: the first epoch used up the time budget; training ends without a clean epoch')
             if save_state:
                 tmp = run / 'weights' / 'state.pt.tmp'
                 torch.save({'run': str(run.resolve()), 'epoch': epoch + 1, 'net': net.state_dict(), 'ema': ema.ema.state_dict(),
                             'ema_updates': ema.updates, 'optimizer': optimizer.state_dict(), 'scaler': scaler.state_dict(),
                             'final_start': schedule.final_start, 'best_fitness': best_fitness, 'best_epoch': best_epoch,
-                            'stale': stale, 'micro': micro, 'args': args}, tmp)
+                            'stale': stale, 'micro': micro, 'args': args, 'final_epochs': schedule.final_epochs,
+                            'warmup': schedule.warmup, 'clean_from': clean_from, 'mosaic_end': train_set.mosaic_end,
+                            'budget': budget.state() if budget is not None else None}, tmp)
                 os.replace(tmp, run / 'weights' / 'state.pt')
             epoch += 1
     finally:
@@ -463,6 +611,15 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     net.to(device).eval()
     threshold = best['threshold']
     log(f'\nbest epoch {best_epoch + 1} (fitness {best_fitness:.4f}), recommended threshold {threshold:.3f}')
+    model._adopt(net.eval(), names, imgsz, threshold, num_queries, run / 'weights' / 'best.pt', args['data'])
+    result = {'dir': run, 'best_epoch': best_epoch + 1, 'val': None, 'test': None, 'planned_epochs': schedule.end,
+              'stop_reason': ('EARLY_STOPPED' if early else 'TIME_BUDGET_REACHED' if budget is not None and schedule.end < epochs
+                              else 'EPOCHS_COMPLETED'),
+              'budget_overrun_s': None}
+    if not final_eval:
+        if budget is not None:
+            result['budget_overrun_s'] = budget.overrun()
+        return result
     val_metrics = validate(net, val_set, names, device, micro, threshold=threshold, plots_dir=run / 'val', workers=workers,
                            amp_dtype=amp_dtype)
     test_metrics = None
@@ -472,5 +629,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                                 workers=workers, amp_dtype=amp_dtype)
         log(f'\ntest (never used for any decision), threshold {threshold:.3f}')
         log(test_metrics.table(names))
-    model._adopt(net.eval(), names, imgsz, threshold, num_queries, run / 'weights' / 'best.pt', args['data'])
-    return {'dir': run, 'best_epoch': best_epoch + 1, 'val': val_metrics, 'test': test_metrics}
+    result.update(val=val_metrics, test=test_metrics)
+    if budget is not None:
+        result['budget_overrun_s'] = budget.overrun()
+    return result

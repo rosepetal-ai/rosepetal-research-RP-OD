@@ -29,7 +29,7 @@ from PIL import Image
 
 from .sources import IMAGE_EXTENSIONS
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 CACHE_DIR = Path(os.environ.get('RPOD_CACHE', Path.home() / '.cache' / 'rpod')) / 'datasets'
 BOX_TOLERANCE = 1e-3            # coordinates this far outside [0, 1] are clipped silently
 EIGHT_BIT_MODES = {'1', 'L', 'LA', 'P', 'PA', 'RGB', 'RGBA', 'RGBX', 'CMYK', 'YCbCr'}
@@ -153,6 +153,9 @@ def _check_one(image_path, num_classes):
                 problems.append(('error', where, 'box goes outside the image (coordinates must be normalized 0-1)'))
                 continue
             x0, y0, x1, y1 = max(0.0, x0), max(0.0, y0), min(1.0, x1), min(1.0, y1)
+            if x1 <= x0 or y1 <= y0:          # wholly inside the tolerance band past an edge: nothing left once clipped
+                problems.append(('warning', where, 'box lies on the edge of the image and has no size once clipped: dropped'))
+                continue
             cls.append(int(c))
             boxes.append([(x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0])
     record = {'path': image_path, 'w': w, 'h': h, 'hash': hashlib.md5(data).hexdigest(),
