@@ -71,6 +71,14 @@ def test_errors_list_every_file_and_reason(tmp_path):
         assert text in msg, text
 
 
+def test_box_with_no_size_once_clipped_is_dropped_with_a_warning(tmp_path):
+    y = make_dataset(tmp_path)
+    (tmp_path / 'labels/train/train0.txt').write_text('0 1.0007 0.5 0.0004 0.1\n0 0.5 0.5 0.2 0.1\n')
+    ds = check_dataset(y, use_cache=False)
+    assert len(ds['records']['train'][0]['cls']) == 1
+    assert any('no size once clipped' in w[3] for w in ds['warnings'])
+
+
 def test_duplicates_across_splits_are_reported(tmp_path):
     y = make_dataset(tmp_path)
     (tmp_path / 'images/test/test0.png').write_bytes((tmp_path / 'images/train/train3.png').read_bytes())

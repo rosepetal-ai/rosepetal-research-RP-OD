@@ -49,7 +49,8 @@ def default_augment(sample, ctx):
     if ctx.epoch >= ctx.epochs - max(1, round(NO_AUG_FRACTION * ctx.epochs)):
         return sample
     rng = ctx.rng
-    mosaic_done = ctx.epoch < round(MOSAIC_FRACTION * ctx.epochs) and rng.random() < P_MOSAIC
+    mosaic_end = round(MOSAIC_FRACTION * ctx.epochs) if getattr(ctx, 'mosaic_end', None) is None else ctx.mosaic_end
+    mosaic_done = ctx.epoch < mosaic_end and rng.random() < P_MOSAIC
     if mosaic_done:
         sample = mosaic([sample] + ctx.sample(3), ctx.imgsz, rng)
     if rng.random() < P_PHOTOMETRIC:

@@ -11,6 +11,7 @@
     model.export()
 """
 from pathlib import Path
+from time import time as _clock
 
 import torch
 from torch.utils.flop_counter import FlopCounterMode
@@ -20,7 +21,7 @@ from .cfg.schema import (DEFAULT_SIZE, SIZES, check_input_size, derive, describe
 from .data import DetectionDataset, check_dataset, class_map, default_augment
 from .engine.exporter import export_onnx
 from .engine.predictor import predict as _predict
-from .engine.trainer import _run_dir, train as _train
+from .engine.trainer import Budget, _run_dir, train as _train
 from .engine.validator import validate
 from .nn import Detector
 from .utils.checkpoint import build_from_checkpoint, load_checkpoint
@@ -90,11 +91,14 @@ class RPOD:
 
     # -------------------------------------------------------------------------------------------- train / validate
     def train(self, data, imgsz=640, epochs=150, patience=20, batch=4, device=None, augment=default_augment,
-              name='exp', multiscale=False, pretrained=True):
+              name='exp', multiscale=False, pretrained=True, time=None, reserve=None, final_eval=True,
+              project='runs/train', workers=None):
         """Train on a YOLO dataset (data.yaml). Afterwards this object is the best model (runs/train/<name>/weights/best.pt).
 
         imgsz: int or [height, width], rounded up to multiples of 32; it is the size used in production too.
-        epochs / patience: after `patience` epochs without improvement the final learning-rate decay starts early.
+        epochs / patience: after `patience` epochs without improvement the final learning-rate decay starts early, and
+            training ends when it is done. None: never. A function patience(planned_epochs) -> int is evaluated again
+            whenever the end of training moves (with `time`).
         batch: effective batch; if it does not fit in the GPU it is split into accumulation steps (shown in the log).
             4 by default: more optimizer steps per epoch trained clearly better on small datasets.
         augment: function(sample, ctx) -> sample applied to training images before the letterbox. By default the
@@ -106,8 +110,23 @@ class RPOD:
             objects at more scales and shapes. Validation and production stay at imgsz.
         pretrained: a new model starts from the COCO weights of its size (downloaded once; everything but the class
             heads). False: only the backbone is pretrained (ImageNet). A model loaded from a checkpoint starts from it.
-        Returns {'dir', 'best_epoch', 'val', 'test'} with the final metrics.
+        time: seconds for the whole call, setup included: training then ends when the time is up rather than after
+            `epochs`, which becomes the most it may train. After every epoch the epochs that still fit are projected,
+            and the final decay, the clean epochs and the end of the mosaic follow the projection (a phase that has
+            started does not move back). It stops between epochs, never inside one, and always leaves room for one
+            clean epoch from the best weights. Not with multiscale.
+        reserve: seconds of `time` the caller needs after train returns (its own evaluation, export...), or a function
+            reserve(stats) -> seconds evaluated after every epoch, with stats {'epoch_s', 'val_s', 'n_val',
+            'val_s_per_image'} measured on this run.
+        final_eval: False skips the final evaluation of the best weights on val and test: they are still loaded and
+            adopted, 'val' and 'test' come back None.
+        project / workers: the run goes to <project>/<name> (with a number added if it exists); dataloader workers
+            (default: RPOD_WORKERS, else up to 8).
+        Returns {'dir', 'best_epoch', 'val', 'test', 'planned_epochs', 'stop_reason', 'budget_overrun_s'}: the final
+        metrics, the epochs the run ended at, why it ended ('EPOCHS_COMPLETED', 'TIME_BUDGET_REACHED' or
+        'EARLY_STOPPED') and, with `time`, how many seconds it went past its share of the budget (negative: to spare).
         """
+        budget = Budget(time, _clock(), reserve) if time is not None else None
         if self.net is None and pretrained:
             size = size_of(self.cfg)
             path = pretrained_weights(size)
@@ -116,8 +135,11 @@ class RPOD:
             else:
                 print(f'starting from the COCO weights of size {size}: {path}')
                 self.net = build_from_checkpoint(load_checkpoint(path))
-        return _train(self, data, _size(imgsz), int(epochs), int(patience), int(batch), device or _default_device(),
-                      augment, name, multiscale=multiscale)
+        if patience is not None and not callable(patience):
+            patience = int(patience)
+        return _train(self, data, _size(imgsz), int(epochs), patience, int(batch), device or _default_device(),
+                      augment, name, project=project, workers=workers, multiscale=multiscale, budget=budget,
+                      final_eval=final_eval)
 
     def val(self, data=None, split='val', device=None, batch=16, name='exp'):
         """Metrics and plots (runs/val/<name>) on a split of the training dataset or of another dataset with the same
