@@ -234,7 +234,7 @@ def evaluate(preds, gts, names, threshold=None, scales=None):
         map50_95=map50_95, map50=float(np.nanmean(ap[0, present])) if present.any() else 0.0,
         precision=mean('precision'), recall=recall, f1=mean('f1'), threshold=threshold,
         mean_iou=float(all_ious.mean()) if len(all_ious) else 0.0, fp_per_image=fp / max(n_images, 1),
-        fitness=0.5 * map50_95 + 0.5 * recall, map_small=by_size['small'], map_medium=by_size['medium'],
+        fitness=map50_95, map_small=by_size['small'], map_medium=by_size['medium'],
         map_large=by_size['large'], size_objects={name: int(n_by_size[r].sum()) for r, (name, _, _) in enumerate(RANGES)
                                                   if name != 'all'}, per_class=rows,
         confusion_matrix=confusion_matrix(preds, gts, num_classes, threshold),

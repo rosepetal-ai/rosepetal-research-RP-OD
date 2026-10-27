@@ -214,6 +214,18 @@ def test_patience_starts_the_decay_from_the_best(tmp_path, monkeypatch, capsys):
     assert len(list(csv.DictReader(open(res['dir'] / 'results.csv')))) == 6
 
 
+def test_a_saturated_validation_keeps_the_latest_epoch(tmp_path, monkeypatch, capsys):
+    """Fitness stuck at its maximum is not a lack of improvement: the best is the latest epoch to reach it, and
+    patience does not send training back to the first one."""
+    monkeypatch.setenv('RPOD_WORKERS', '0')
+    monkeypatch.chdir(tmp_path)
+    data = make_dataset(tmp_path / 'data', {'train': 2, 'val': 1})
+    scripted(monkeypatch, [0.5, 1.0])
+    res = RPOD('s').train(data, imgsz=128, epochs=6, patience=2, batch=2, device='cpu', pretrained=False)
+    assert 'no improvement' not in capsys.readouterr().out
+    assert res['best_epoch'] == 6
+
+
 def test_open_file_limit_is_raised_for_dataloader_workers():
     """Workers pass each tensor as an open file: a limit of 1024 broke a COCO validation with 16 workers."""
     resource = pytest.importorskip('resource')
