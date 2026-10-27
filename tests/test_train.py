@@ -84,6 +84,30 @@ def test_train_end_to_end(tmp_path, monkeypatch, capsys):
     assert reloaded.data == str(data.resolve()) and reloaded.threshold == m.threshold
 
 
+def test_pre_ampere_cards_train_in_float16(monkeypatch):
+    # torch answers bf16 "supported" on a T4 by emulating it; only sm80+ has it natively
+    from rpod.engine import trainer as T
+    cuda = torch.device('cuda')
+    native = {'T4': False, 'L4': True}
+    for card, has_bf16 in native.items():
+        monkeypatch.setattr(torch.cuda, 'is_bf16_supported',
+                            lambda including_emulation=True, n=has_bf16: n or including_emulation)
+        assert T._amp(cuda) == (torch.bfloat16 if has_bf16 else torch.float16), card
+    assert T._amp(torch.device('cpu')) is None
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='needs a GPU')
+def test_float16_training_runs(tmp_path, monkeypatch):
+    from rpod.engine import trainer as T
+    monkeypatch.setattr(T, '_amp', lambda device: torch.float16)
+    monkeypatch.setenv('RPOD_WORKERS', '0')
+    monkeypatch.chdir(tmp_path)
+    data = make_dataset(tmp_path / 'data', {'train': 4, 'val': 2, 'test': 2})
+    res = RPOD('s').train(data, imgsz=128, epochs=2, batch=2, device='cuda', name='t')
+    rows = list(csv.DictReader(open(res['dir'] / 'results.csv')))
+    assert rows and all(np.isfinite(float(r['map50_95'])) for r in rows)
+
+
 def test_interrupted_run_resumes(tmp_path, monkeypatch):
     """save_state writes the whole training state every epoch; resume continues the same run where it stopped."""
     from rpod.engine import trainer as T
