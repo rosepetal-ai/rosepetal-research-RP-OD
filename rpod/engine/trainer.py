@@ -547,11 +547,16 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
             metrics = validate(ema.ema, val_set, names, device, micro, workers=workers, amp_dtype=amp_dtype)
             val_s = time.time() - t_val
             phase = schedule.phase(epoch)
-            # a tie counts as an improvement: a small validation set saturates (fitness 1.0 from epoch 8 on, 3 val
-            # images), and keeping the first epoch to get there shipped an undertrained model with duplicate boxes
+            # a tie takes over as the best but is no improvement for patience. A small validation set saturates
+            # (fitness 1.0 from epoch 8 on, 3 val images): keeping the first epoch to get there shipped an undertrained
+            # model with duplicate boxes, while resetting patience on ties trained to the end of the budget
             improved = metrics.fitness >= best_fitness
             if improved:
-                best_fitness, best_epoch, stale = metrics.fitness, epoch, 0
+                if metrics.fitness > best_fitness:
+                    stale = 0
+                elif phase == 'flat':
+                    stale += 1
+                best_fitness, best_epoch = metrics.fitness, epoch
                 save_checkpoint(run / 'weights' / 'best.pt', ema.ema, model.cfg, names, imgsz, num_queries,
                                 metrics.threshold, {**metrics.to_dict(), 'epoch': epoch + 1}, extra)
             elif phase == 'flat':
