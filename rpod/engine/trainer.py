@@ -253,7 +253,9 @@ def _freeze_backbone_bn(net):
 def _amp(device):
     if device.type != 'cuda':
         return None
-    return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    # without including_emulation=False a T4 (sm75) answers True and trains in
+    # emulated bfloat16, several times slower than its float16 tensor cores
+    return torch.bfloat16 if torch.cuda.is_bf16_supported(including_emulation=False) else torch.float16
 
 
 def _autocast(device, dtype):
