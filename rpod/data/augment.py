@@ -6,7 +6,8 @@ letterbox. RPOD.train uses it unless it gets augment=None (no augmentation) or a
 
 Every phase is a fraction of ctx.epochs, the epoch where training ends: the `epochs` given to train, or earlier when
 patience starts the final learning-rate decay sooner (the trainer moves ctx.epochs with it). So the recipe scales with
-any number of epochs.
+any number of epochs. With a time budget the phases are fractions of the time instead, and the trainer tells every
+epoch's phase (ctx.mosaic, ctx.clean).
 
   first MOSAIC_FRACTION (25 %)   mosaic with probability P_MOSAIC (0.5)
   every epoch but the last 4 %   photometric distortion 0.5, zoom-out 0.5 (not after a mosaic), IoU crop 0.8, flip 0.5
@@ -46,11 +47,13 @@ NO_AUG_FRACTION = 0.04                               # = the trainer's clean_fra
 
 def default_augment(sample, ctx):
     """function(sample, ctx) -> sample for RPOD.train (see the module docstring)."""
-    if ctx.epoch >= ctx.epochs - max(1, round(NO_AUG_FRACTION * ctx.epochs)):
+    clean = getattr(ctx, 'clean', None)
+    if ctx.epoch >= ctx.epochs - max(1, round(NO_AUG_FRACTION * ctx.epochs)) if clean is None else clean:
         return sample
     rng = ctx.rng
-    mosaic_end = round(MOSAIC_FRACTION * ctx.epochs) if getattr(ctx, 'mosaic_end', None) is None else ctx.mosaic_end
-    mosaic_done = ctx.epoch < mosaic_end and rng.random() < P_MOSAIC
+    told = getattr(ctx, 'mosaic', None)
+    mosaic_phase = ctx.epoch < round(MOSAIC_FRACTION * ctx.epochs) if told is None else told
+    mosaic_done = mosaic_phase and rng.random() < P_MOSAIC
     if mosaic_done:
         sample = mosaic([sample] + ctx.sample(3), ctx.imgsz, rng)
     if rng.random() < P_PHOTOMETRIC:
