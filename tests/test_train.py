@@ -215,15 +215,18 @@ def test_patience_starts_the_decay_from_the_best(tmp_path, monkeypatch, capsys):
 
 
 def test_a_saturated_validation_keeps_the_latest_epoch(tmp_path, monkeypatch, capsys):
-    """Fitness stuck at its maximum is not a lack of improvement: the best is the latest epoch to reach it, and
-    patience does not send training back to the first one."""
+    """Fitness stuck at its maximum: the best is the latest epoch to reach it, but the tie is no improvement for
+    patience, which starts the decay from the latest weights instead of going back to the first epoch at the top."""
     monkeypatch.setenv('RPOD_WORKERS', '0')
     monkeypatch.chdir(tmp_path)
     data = make_dataset(tmp_path / 'data', {'train': 2, 'val': 1})
-    scripted(monkeypatch, [0.5, 1.0])
-    res = RPOD('s').train(data, imgsz=128, epochs=6, patience=2, batch=2, device='cpu', pretrained=False)
-    assert 'no improvement' not in capsys.readouterr().out
-    assert res['best_epoch'] == 6
+    restores = scripted(monkeypatch, [0.5, 1.0])
+    res = RPOD('s').train(data, imgsz=128, epochs=10, patience=2, batch=2, device='cpu', pretrained=False)
+    out = capsys.readouterr().out
+    rows = list(csv.DictReader(open(res['dir'] / 'results.csv')))
+    assert 'no improvement for 2 epochs: starting the final' in out      # after epochs 3 and 4, both ties
+    assert restores == [] and len(rows) < 10
+    assert res['best_epoch'] == len(rows)
 
 
 def test_open_file_limit_is_raised_for_dataloader_workers():
