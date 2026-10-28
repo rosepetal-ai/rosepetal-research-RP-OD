@@ -15,12 +15,16 @@ another function, for example from an augmentation library:
         # ctx.epoch      the current epoch, from 0
         # ctx.epochs     the epoch where training ends: the epochs asked for, or earlier once patience brings
         #                the end forward
+        # ctx.mosaic     with a time budget, whether this epoch is in the mosaic phase (None without one: the
+        #                phases are fractions of ctx.epochs)
+        # ctx.clean      with a time budget, whether this epoch is in the clean last stretch (None without one)
         # ctx.imgsz      [height, width] the image will be letterboxed into
         # ctx.rng        numpy random generator for this sample
         return sample   # any size: the letterbox comes after
 """
 import math
 import multiprocessing as mp
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -47,14 +51,16 @@ class AugmentError(RuntimeError):
 
 
 class AugmentContext:
-    def __init__(self, dataset, epoch, epochs, imgsz, rng, mosaic_end=None):
-        """mosaic_end: the epoch where the mosaic ended, once a time budget has fixed it (None: follow `epochs`)."""
+    def __init__(self, dataset, epoch, epochs, imgsz, rng, mosaic=None, clean=None):
+        """mosaic / clean: the phase of this epoch when a time budget decides it (None: follow `epochs`)."""
         self._dataset = dataset
         self.epoch, self.epochs, self.imgsz, self.rng = epoch, epochs, list(imgsz), rng
-        self.mosaic_end = mosaic_end
+        self.mosaic, self.clean = mosaic, clean
+        self.drawn = 0                            # samples drawn with sample(): the trainer times composite ones
 
     def sample(self, k=1):
         """k random training samples, read from disk and not augmented."""
+        self.drawn += k
         pool = self._dataset.pool
         picks = self.rng.choice(len(pool), size=k, replace=len(pool) < k)
         return [self._dataset.read(pool[i]) for i in picks]
@@ -80,7 +86,8 @@ class DetectionDataset(Dataset):
         self.seed, self.id_map = seed, id_map
         self._epoch = mp.Value('i', 0)           # shared with the dataloader workers
         self._epochs = mp.Value('i', epochs)     # the end of training, which patience can bring forward
-        self._mosaic_end = mp.Value('i', -1)     # -1: the mosaic phase follows the end of training
+        self._mosaic = mp.Value('i', -1)         # time budget: 1/0 this epoch is/is not in the phase; -1 no budget
+        self._clean = mp.Value('i', -1)
 
     def __len__(self):
         return len(self.records)
@@ -97,13 +104,14 @@ class DetectionDataset(Dataset):
         self._epochs.value = int(epochs)
 
     @property
-    def mosaic_end(self):
-        return None if self._mosaic_end.value < 0 else self._mosaic_end.value
+    def phase(self):
+        """(mosaic, clean) of the current epoch as a time budget set them, None where it has not."""
+        return tuple(None if v.value < 0 else bool(v.value) for v in (self._mosaic, self._clean))
 
-    def freeze_mosaic_end(self, epoch):
-        """The mosaic has ended at `epoch` and stays ended: with a time budget the end of training can move later, and
-        the mosaic must not come back."""
-        self._mosaic_end.value = int(epoch)
+    def set_phase(self, mosaic, clean):
+        """With a time budget the phases are shares of the time, which the epochs cannot tell: the trainer sets them
+        before every epoch."""
+        self._mosaic.value, self._clean.value = int(bool(mosaic)), int(bool(clean))
 
     def ground_truth(self, i):
         """Boxes xyxy in pixels of the original image and model class ids, without reading the image."""
@@ -125,15 +133,16 @@ class DetectionDataset(Dataset):
     def __getitem__(self, item):
         i, size = item if isinstance(item, tuple) else (item, self.imgsz)   # (index, [h, w]) from multi-scale batches
         size = list(size)
+        t0 = time.perf_counter()
         record = self.records[i]
-        sample = self.read(record)
+        sample, drawn = self.read(record), 0
         if self.augment is not None:
             epoch = self._epoch.value
             worker = get_worker_info()
             rng = np.random.default_rng([self.seed, epoch, worker.id if worker else 0, i])
-            sample = self._checked(self.augment(sample, AugmentContext(self, epoch, self._epochs.value, size, rng,
-                                                                self.mosaic_end)),
-                                  record)
+            ctx = AugmentContext(self, epoch, self._epochs.value, size, rng, *self.phase)
+            sample = self._checked(self.augment(sample, ctx), record)
+            drawn = ctx.drawn
         image, geom = letterbox(sample.image, *size)
         scale, _, _, top, left = geom
         out_h, out_w = size
@@ -142,7 +151,8 @@ class DetectionDataset(Dataset):
         cxcywh = np.stack([(b[:, 0] + b[:, 2]) / 2, (b[:, 1] + b[:, 3]) / 2, b[:, 2] - b[:, 0], b[:, 3] - b[:, 1]], 1)
         target = {'labels': torch.from_numpy(np.asarray(sample.labels, np.int64)),
                   'boxes': torch.from_numpy(cxcywh.reshape(-1, 4).astype(np.float32))}
-        meta = {'index': i, 'path': record['path'], 'orig_shape': sample.image.shape[:2], 'geom': geom}
+        meta = {'index': i, 'path': record['path'], 'orig_shape': sample.image.shape[:2], 'geom': geom, 'drawn': drawn,
+                'seconds': time.perf_counter() - t0}         # read + augment + letterbox, in the worker
         return image, target, meta
 
     def _checked(self, sample, record):

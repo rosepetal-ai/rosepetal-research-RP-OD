@@ -111,10 +111,10 @@ class RPOD:
         pretrained: a new model starts from the COCO weights of its size (downloaded once; everything but the class
             heads). False: only the backbone is pretrained (ImageNet). A model loaded from a checkpoint starts from it.
         time: seconds for the whole call, setup included: training then ends when the time is up rather than after
-            `epochs`, which becomes the most it may train. After every epoch the epochs that still fit are projected,
-            and the final decay, the clean epochs and the end of the mosaic follow the projection (a phase that has
-            started does not move back). It stops between epochs, never inside one, and always leaves room for one
-            clean epoch from the best weights. Not with multiscale.
+            `epochs`, which becomes the most it may train. The phases become shares of the time (mosaic in the first
+            25 %, final decay in the last 20 %, clean images in the last 4 %), decided epoch by epoch from what each
+            kind of epoch costs on this run; the warmup is sized to the steps that fit. It stops between epochs, never
+            inside one, and the last epoch is always a clean one from the best weights. Not with multiscale.
         reserve: seconds of `time` the caller needs after train returns (its own evaluation, export...), or a function
             reserve(stats) -> seconds evaluated after every epoch, with stats {'epoch_s', 'val_s', 'n_val',
             'val_s_per_image'} measured on this run.

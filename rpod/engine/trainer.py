@@ -11,8 +11,11 @@ default augmentation, at imgsz with multi-scale) also start again from the best 
 the best epoch, while continuing from weights already past it can only partly recover (COCO, size m: best epoch
 49.0 AP, 49.4 after one clean epoch from it; the run's own last epoch, 48.5).
 
-The best epoch is the one with the highest 0.5 * mAP50-95 + 0.5 * recall (IoU >= 0.5, at the best-F1 threshold); its
-EMA weights and threshold go to best.pt. The test split, if any, is evaluated once at the end with that threshold and
+With a time budget the same phases are shares of the time instead of the epochs (Budget, _plan_epoch): training
+stops between epochs, and the warmup is sized to the steps the budget holds.
+
+The best epoch is the one with the highest mAP50-95, the latest one on a tie; its EMA weights and threshold (the
+best-F1 one) go to best.pt. The test split, if any, is evaluated once at the end with that threshold and
 never used for a decision.
 """
 import contextlib
@@ -82,6 +85,8 @@ class Schedule:
         self.final_start = epochs - self.final_epochs
         self.warmup = self._warmup(epochs)
         self.low = r['final_lr_ratio']
+        self.decay_from, self.decay_p0 = None, 0.0     # set when a running decay is re-planned (time budget)
+        self.warmup_from, self.warmup_f0 = 0, 0.0         # set when a running warmup is resized (time budget)
 
     def _warmup(self, epochs):
         return max(1, min(self.r['warmup_steps'], round(self.r['warmup_max_fraction'] * epochs * self.spe)))
@@ -90,33 +95,60 @@ class Schedule:
     def end(self):
         return self.final_start + self.final_epochs
 
-    def replan(self, epochs, done):
-        """Time budget, before the final decay: training now ends after `epochs`. The decay keeps its share of them but
-        never starts before `done` (epochs already trained). The warmup only gets shorter: if the step already passed
-        the new one, it ends there."""
-        self.final_epochs = max(1, round(self.r['final_fraction'] * epochs))
-        self.final_start = max(done, epochs - self.final_epochs)
-        self.final_epochs = epochs - self.final_start
-        self.warmup = min(self.warmup, self._warmup(epochs))
+    def resize_warmup(self, steps, done):
+        """Time budget: the warmup now lasts `steps` (at most warmup_steps), counted from the start, after `done` steps
+        of it. The factor goes on from where it is to 1 over what is left, at least `done` more steps: a budget that
+        holds fewer steps than the warmup it started with must not jump to the full learning rate."""
+        steps = max(1, min(self.r['warmup_steps'], steps))
+        if done >= self.warmup:
+            return
+        f0 = done / self.warmup if self.warmup_from == 0 else self._warmup_factor(done - 1)
+        self.warmup_from, self.warmup_f0, self.warmup = done, f0, max(steps, 2 * done)
 
-    def cut(self, end, done):
-        """Time budget: training ends at `end`, earlier than planned. A decay already running keeps its start and only
-        gets shorter; one that has not started begins at the last epoch."""
-        if self.final_start >= done:
-            self.final_start = min(self.final_start, max(end - 1, done))
+    def _warmup_factor(self, g):
+        if self.warmup_from == 0:
+            return (g + 1) / self.warmup
+        return self.warmup_f0 + (1 - self.warmup_f0) * (g + 1 - self.warmup_from) / (self.warmup - self.warmup_from)
+
+    def start_decay(self, epoch, epochs):
+        """The final decay starts at `epoch` and lasts `epochs` (patience, or the time budget reaching it)."""
+        self.final_start, self.final_epochs = epoch, epochs
+        self.decay_from, self.decay_p0 = None, 0.0
+
+    def plan_decay(self, end, done):
+        """Time budget, the decay running: training now ends at `end`. What is left of the decay is spread over the
+        epochs from `done` to `end`, so the learning rate goes on from where it is, without a jump, and still reaches
+        its floor at the end."""
+        if end == self.end:
+            return
+        self.decay_p0, self.decay_from = self._progress(done, 0), done
         self.final_epochs = end - self.final_start
+
+    def plan_flat(self, end, done):
+        """Time budget, before the decay: training is projected to end at `end`; the decay keeps its share of it but
+        never starts before the next epoch (the budget starts it, when the time comes)."""
+        final = max(1, round(self.r['final_fraction'] * end))
+        self.final_start = max(done + 1, end - final)
+        self.final_epochs = max(1, end - self.final_start)
 
     def phase(self, epoch):
         return 'final' if epoch >= self.final_start else 'flat'
 
+    def _progress(self, epoch, step):
+        if self.decay_from is None:
+            p = ((epoch - self.final_start) * self.spe + step) / (self.final_epochs * self.spe)
+        else:
+            p = self.decay_p0 + (1 - self.decay_p0) * (((epoch - self.decay_from) * self.spe + step)
+                                                       / ((self.end - self.decay_from) * self.spe))
+        return min(max(p, 0.0), 1.0)
+
     def factor(self, epoch, step):
         g = epoch * self.spe + step
         if g < self.warmup:
-            return (g + 1) / self.warmup
+            return self._warmup_factor(g)
         if epoch < self.final_start:
             return 1.0
-        progress = ((epoch - self.final_start) * self.spe + step) / (self.final_epochs * self.spe)
-        return self.low + (1 - self.low) * 0.5 * (1 + math.cos(math.pi * min(progress, 1.0)))
+        return self.low + (1 - self.low) * 0.5 * (1 + math.cos(math.pi * self._progress(epoch, step)))
 
 
 def _clean_start(end, r):
@@ -126,33 +158,77 @@ def _clean_start(end, r):
 
 
 class Budget:
-    """Training against a time budget (RPOD.train(time=...)): how many epochs fit, measured as the run goes.
+    """Training against a time budget (RPOD.train(time=...)): the phases are fractions of the time, not of the epochs.
 
     `seconds` counts from `started` (the call to train, so the setup is included) to the end of train. `reserve` is
     time the caller needs afterwards (seconds, or reserve(stats) -> seconds with the stats below), taken off the budget
-    after every epoch. An epoch costs the mean of the last WINDOW epochs (the first one too, until there are others: it
-    carries the CUDA and worker start-up); clean epochs are measured apart, without augmentation they are cheaper."""
+    after every epoch. Epochs are measured by kind, since they cost differently: with mosaic (four images and four times
+    the objects per sample), plain (augmented, no mosaic) and clean; a kind not measured yet costs what the nearest one
+    did. An epoch costs the mean of the last WINDOW of its kind; the first epoch of the run is measured without its
+    first steps, which carry the CUDA and worker start-up."""
 
     WINDOW = 3
+    NEAREST = {'mosaic': ('mosaic', 'plain', 'clean'), 'plain': ('plain', 'clean', 'mosaic'),
+               'clean': ('clean', 'plain', 'mosaic')}
 
     def __init__(self, seconds, started, reserve=None, clock=time.time):
         self.seconds, self.started, self.clock = float(seconds), started, clock
         self.reserve = reserve if callable(reserve) else (lambda stats, s=float(reserve or 0): s)
-        self.normal, self.clean = [], []
+        self.costs = {kind: [] for kind in self.NEAREST}
+        self.guesses = {}                         # kind -> seconds, from the first epoch's steps (estimate_from_steps)
         self.val_s = self.n_val = self.save_s = 0
 
-    def record(self, seconds, clean, val_s, n_val, save_s):
-        (self.clean if clean else self.normal).append(seconds)
+    def record(self, seconds, kind, val_s, n_val, save_s):
+        self.costs[kind].append(seconds)
         self.val_s, self.n_val, self.save_s = val_s, n_val, save_s
+
+    def cost(self, kind):
+        """Seconds an epoch of this kind costs: measured, else estimated from the first epoch's steps, else what the
+        nearest kind measured (0 before the first epoch)."""
+        for k in self.NEAREST[kind]:
+            if k == 'mosaic' and kind in self.guesses:      # an estimate of its own kind beats a mosaic epoch
+                return self.guesses[kind]
+            if self.costs[k]:
+                last = self.costs[k][-self.WINDOW:]
+                return sum(last) / len(last)
+        return 0.0
+
+    def estimate_from_steps(self, steps, steps_per_epoch, workers, overhead_s):
+        """Before any epoch without mosaic has run, what one would cost, from the steps of a mosaic epoch. A step waits
+        for its data and then computes; the dataloader workers prepare samples in parallel, so an epoch takes about
+        the longer of the two: steps x GPU time per step, or samples x seconds per sample / workers (their sum with no
+        workers). A mosaic sample reads four images, so where the workers are the bottleneck (big images, few CPUs: on a
+        T4 VM, 596 s with mosaic and 244 s without) the plain epoch is much cheaper; where the GPU is, a little.
+
+        `steps`: [(seconds waiting for the data, GPU seconds, [(composite, seconds) per sample])] per step. The GPU time of a step without composite
+        samples comes from a least-squares line against their share (their mean when the share does not vary), the
+        sample time from the samples without any. The model is scaled to what the mosaic steps really took, and the
+        epoch's validation and save (`overhead_s`) added. With fewer than 8 steps nothing is estimated."""
+        if len(steps) < 8:
+            return
+        gpu = np.array([g for _, g, _ in steps], dtype=np.float64)
+        share = np.array([np.mean([c for c, _ in samples]) if samples else 0.0 for _, _, samples in steps])
+        every = [t for _, _, samples in steps for _, t in samples]
+        alone = [t for _, _, samples in steps for c, t in samples if not c] or every
+        gpu_plain = gpu.mean()
+        if share.std() >= 0.05:
+            slope, base = np.polyfit(share, gpu, 1)
+            if slope > 0 and base > 0:
+                gpu_plain = base
+
+        def train_s(gpu_step, sample_s):
+            load = sample_s * len(every)
+            return gpu_step * len(steps) + load if workers == 0 else max(gpu_step * len(steps), load / workers)
+
+        took = sum(w + g for w, g, _ in steps)
+        model = train_s(gpu.mean(), float(np.mean(every)))
+        scale = took / model if model > 0 and took > 0 else 1.0
+        plain = scale * train_s(gpu_plain, float(np.mean(alone))) * steps_per_epoch / len(steps)
+        self.guesses['plain'] = self.guesses['clean'] = plain + overhead_s
 
     @property
     def epoch_s(self):
-        times = self.normal[1:] if len(self.normal) > 1 else self.normal or self.clean
-        return sum(times[-self.WINDOW:]) / len(times[-self.WINDOW:])
-
-    @property
-    def clean_s(self):
-        return sum(self.clean) / len(self.clean) if self.clean else self.epoch_s
+        return self.cost('plain')
 
     @property
     def stats(self):
@@ -167,48 +243,67 @@ class Budget:
         the best weights, adopt them)."""
         return self.seconds - self.elapsed() - self.reserve(self.stats) - 2 * self.save_s
 
-    def fits(self, normal, clean):
-        return normal * self.epoch_s + clean * self.clean_s <= self.remaining()
-
-    def planned(self, done, cap):
-        """Epochs the whole run can have, from `done` already trained: at least one more, at most `cap`."""
-        more = math.floor(self.remaining() / self.epoch_s) if self.epoch_s > 0 else cap
-        return max(done + 1, min(cap, done + more))
+    def fraction(self, seconds=0.0):
+        """Share of the time for epochs used once `seconds` more have run."""
+        total = self.elapsed() + self.remaining()
+        return (self.elapsed() + seconds) / total if total > 0 else 1.0
 
     def overrun(self):
         """Seconds past the budget the caller left to rpod (negative: time to spare)."""
         return self.elapsed() - (self.seconds - self.reserve(self.stats))
 
     def state(self):
-        return {'seconds': self.seconds, 'elapsed': self.elapsed(), 'normal': self.normal, 'clean': self.clean,
+        return {'seconds': self.seconds, 'elapsed': self.elapsed(), 'costs': self.costs, 'guesses': self.guesses,
                 'val_s': self.val_s, 'n_val': self.n_val, 'save_s': self.save_s}
 
     def load(self, state):
         """Continue a resumed run with what was left of its budget."""
         self.started = self.clock() - state['elapsed']
-        self.normal, self.clean = list(state['normal']), list(state['clean'])
+        self.costs = {k: list(v) for k, v in state['costs'].items()}
+        self.guesses = dict(state['guesses'])
         self.val_s, self.n_val, self.save_s = state['val_s'], state['n_val'], state['save_s']
 
 
-def _fit_to_budget(budget, schedule, done, cap, clean_from):
-    """After an epoch, in time mode: move the end of training to what fits. Stops only at an epoch boundary, and only
-    after an epoch that leaves room for one clean epoch; started phases never move (the decay can only get shorter, the
-    clean stretch can only end sooner)."""
-    if done >= schedule.end:
-        return
-    if clean_from is not None and done > clean_from:            # in the clean stretch: one more if it fits
-        if not budget.fits(0, 1):
-            schedule.cut(done, done)
-        return
-    if not budget.fits(1, 1):          # no room for another epoch and the clean one after it: the next is the last
-        schedule.cut(done + 1 if budget.fits(0, 1) else done, done)
-        return
-    planned = budget.planned(done, cap)
-    if done > schedule.final_start:                             # the decay has started: it can only get shorter
-        if planned < schedule.end:
-            schedule.cut(planned, done)
+def _plan_epoch(budget, schedule, done, cap, clean_from, mosaic, early, r):
+    """After `done` epochs, in time mode: what the next epoch is, from the time left and what each kind of epoch costs.
+    Returns (clean_from, mosaic) and moves the end of `schedule` (equal to `done`: training stops here).
+
+    Training only stops between epochs, and the last epoch is always clean, so the next one is the last when it and a
+    clean one do not both fit. The phases go by the share of the time at the middle of the next epoch: mosaic before
+    MOSAIC_FRACTION, the final decay from 1 - final_fraction, clean from 1 - clean_fraction. A phase never comes back
+    once over: the mosaic stays off, the decay and the clean stretch only end sooner or later with the time left (the
+    decay without a jump in the learning rate). After patience (`early`) time can only bring the end forward."""
+    left, clean_s = budget.remaining(), budget.cost('clean')
+    in_clean = clean_from is not None and clean_from < done
+    mosaic = mosaic and not in_clean and budget.fraction(budget.cost('mosaic') / 2) < MOSAIC_FRACTION
+    next_s = clean_s if in_clean else budget.cost('mosaic' if mosaic else 'plain')
+    if done >= cap or left < clean_s:
+        n = 0
+    elif in_clean:
+        n = math.floor(left / clean_s) if clean_s > 0 else cap - done
+    elif left < next_s + clean_s:
+        n = 1
     else:
-        schedule.replan(planned, done)
+        plain_s = budget.cost('plain')
+        n = 2 + (math.floor((left - next_s - clean_s) / plain_s) if plain_s > 0 else cap)
+    end = min(cap, done + n)
+    if early:
+        end = min(end, schedule.end)
+    if end <= done:
+        start = min(schedule.final_start, done)
+        schedule.start_decay(start, done - start)
+        return clean_from, False
+    clean = (in_clean or end == done + 1 or budget.fraction(clean_s / 2) >= 1 - r['clean_fraction']
+             or early and done >= _clean_start(end, r))        # after patience the end is known in epochs
+    if clean and clean_from is None:
+        clean_from = done
+    if schedule.final_start <= done:
+        schedule.plan_decay(end, done)
+    elif clean or budget.fraction(next_s / 2) >= 1 - r['final_fraction']:
+        schedule.start_decay(done, end - done)
+    else:
+        schedule.plan_flat(end, done)
+    return clean_from, mosaic and not clean
 
 
 def _restore_best(path, net, ema):
@@ -349,9 +444,10 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     patience: epochs without improvement before the final decay starts early; None never; a function
     patience(planned_epochs) -> int is evaluated again whenever the end of training moves.
 
-    budget: a Budget, to train for a time instead of a number of epochs (`epochs` is then the most it may train). After
-    every epoch the run is replanned to the epochs that fit: the decay, the clean stretch and the end of the mosaic
-    follow, but once a phase has started it does not move back. Not with multiscale.
+    budget: a Budget, to train for a time instead of a number of epochs (`epochs` is then the most it may train). The
+    phases are shares of the time: the mosaic, the decay and the clean stretch start at the epoch whose middle falls past
+    their share, and after every epoch _plan_epoch decides what the next one is from what each kind of epoch cost so
+    far. It stops between epochs, never inside one. Not with multiscale.
 
     final_eval: evaluate the best weights on val and test (with plots) at the end. False: only reload and adopt them
     ('val' and 'test' are None), for a caller that evaluates on its own.
@@ -453,13 +549,17 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
         schedule.final_start = state['final_start']
         best_fitness, best_epoch, stale, epoch = state['best_fitness'], state['best_epoch'], state['stale'], state['epoch']
     clean_from, early = None, False           # clean_from: first clean epoch, fixed once it has started
+    mosaic = True                             # time mode: the mosaic is on until the budget turns it off for good
+    if budget is not None and epochs == 1:
+        clean_from = 0                        # the only epoch is the last one, clean as in epoch mode
     if state and budget is not None:
         schedule.final_epochs, schedule.warmup = state['final_epochs'], state['warmup']
-        clean_from = state['clean_from']
-        if state['mosaic_end'] is not None:
-            train_set.freeze_mosaic_end(state['mosaic_end'])
+        schedule.decay_from, schedule.decay_p0 = state['decay_from'], state['decay_p0']
+        schedule.warmup_from, schedule.warmup_f0 = state['warmup_from'], state['warmup_f0']
+        clean_from, mosaic, early = state['clean_from'], state['mosaic'], state['early']
         budget.load(state['budget'])
     train_set.set_epochs(schedule.end)        # the augmentation's phases follow the real end of training
+    first_epoch = epoch                       # its first steps carry the start-up: left out of its cost
 
     # ---- run folder
     run = Path(state['run']) if state else _run_dir(project, name)
@@ -487,20 +587,30 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     try:
         while epoch < schedule.end:
             t0 = time.time()
-            if clean_from is None and epoch >= _clean_start(schedule.end, r):
-                clean_from = epoch
+            if budget is None and clean_from is None and epoch >= _clean_start(schedule.end, r):
+                clean_from = epoch                   # time mode: _plan_epoch decides it
+            clean = clean_from is not None and epoch >= clean_from
             if r['restore_best'] and epoch == clean_from and 0 <= best_epoch < epoch - 1:
                 _restore_best(run / 'weights' / 'best.pt', net, ema)
                 log(f'\nepochs {clean_from + 1}-{schedule.end}: back to the weights of the best epoch ({best_epoch + 1})')
-            if budget is not None and train_set.mosaic_end is None and epoch >= round(MOSAIC_FRACTION * schedule.end):
-                train_set.freeze_mosaic_end(epoch)   # the end of the mosaic stays put if the projection grows later
+            if budget is not None:
+                train_set.set_phase(mosaic=mosaic and not clean, clean=clean)
             train_set.set_epoch(epoch)
             if sampler:
                 sampler.epoch, sampler.fixed = epoch, clean_from is not None and epoch >= clean_from
             _set_train_mode(net, freeze_bn)
             sums, done, seen, next_report = {}, 0, 0, t0 + PROGRESS_SECONDS
+            # the first epoch of the run is timed from step `warm`, and in time mode its steps `warm`-2*`warm` size the
+            # warmup to the steps the budget holds, not to `epochs` (only a cap there)
+            warm = min(10, steps_per_epoch // 4) if epoch == first_epoch else 0
+            t_warm = None
+            # time mode, a mosaic epoch before any other: every step timed (synchronised) with its share of composite
+            # samples, to estimate an epoch without mosaic before one has run (Budget.estimate_from_steps)
+            probing = budget is not None and epoch == first_epoch and mosaic and not clean and not budget.costs['plain']
+            probe = [] if probing else None
             it = iter(loader)
             for step in range(steps_per_epoch):
+                t_step = time.time()
                 factor = schedule.factor(epoch, step)
                 for g in optimizer.param_groups:
                     g['lr'] = g['base_lr'] * factor
@@ -518,6 +628,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                             break
                 if not group:
                     break
+                t_data = time.time()
                 total_boxes = sum(len(t['labels']) for _, targets, _ in group for t in targets)
                 total_images = sum(len(images) for images, _, _ in group)
                 for images, targets, _ in group:
@@ -537,6 +648,21 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                 ema.update(net)
                 done += 1
                 seen += total_images
+                if probe is not None and done > warm:
+                    if device.type == 'cuda':
+                        torch.cuda.synchronize(device)
+                    probe.append((t_data - t_step, time.time() - t_data,
+                                  [(m['drawn'] > 0, m['seconds']) for _, _, metas in group for m in metas]))
+                if warm and done in (warm, 2 * warm):
+                    if device.type == 'cuda':
+                        torch.cuda.synchronize(device)
+                    if done == warm:
+                        t_warm = time.time()
+                    elif budget is not None and not state:
+                        step_s = (time.time() - t_warm) / warm
+                        if step_s > 0:
+                            steps = (budget.elapsed() + budget.remaining()) / step_s
+                            schedule.resize_warmup(round(r['warmup_max_fraction'] * steps), done)
                 if time.time() >= next_report:
                     next_report = time.time() + PROGRESS_SECONDS
                     log(_progress(epoch, schedule.end, step + 1, steps_per_epoch, float(sums['loss']) / done,
@@ -566,11 +692,25 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                             metrics.threshold, {**metrics.to_dict(), 'epoch': epoch + 1}, extra)
             save_s = time.time() - t_save
             seconds = time.time() - t0
-            if budget is not None:     # replan before the log, so that 'epoch N/E' shows the current projection
-                budget.record(seconds, clean_from is not None and epoch >= clean_from, val_s, len(val_set), save_s)
-                before = schedule.end
-                _fit_to_budget(budget, schedule, epoch + 1, epochs, clean_from)
-                train_set.set_epochs(schedule.end)
+            wait = patience(schedule.end) if callable(patience) else patience
+            stopped = phase == 'flat' and wait is not None and stale >= wait and epoch + 1 < schedule.final_start
+            back = False
+            if stopped:
+                schedule.start_decay(epoch + 1, schedule.final_epochs)
+                early = True
+                back = r['restore_best'] and best_epoch < epoch
+                if back:
+                    _restore_best(run / 'weights' / 'best.pt', net, ema)
+            if budget is not None:     # plan before the log, so that 'epoch N/E' shows the current projection
+                cost = seconds
+                if t_warm is not None and done > warm:       # the steps before `warm`, at the pace of the rest
+                    cost = (t_val - t_warm) * done / (done - warm) + time.time() - t_val
+                budget.record(cost, 'clean' if clean else 'mosaic' if mosaic else 'plain', val_s, len(val_set), save_s)
+                if probe is not None:
+                    budget.estimate_from_steps(probe, steps_per_epoch, workers, time.time() - t_val)
+                before, had_mosaic, had_clean = schedule.end, mosaic, clean_from
+                clean_from, mosaic = _plan_epoch(budget, schedule, epoch + 1, epochs, clean_from, mosaic, early, r)
+            train_set.set_epochs(schedule.end)
             writer.writerow({'epoch': epoch + 1, 'phase': phase, 'lr': float(f"{factor * r['lr']:.4g}"),
                              **{k: round(v, 5) for k, v in means.items()},
                              **{k: round(v, 5) for k, v in metrics.to_dict().items()}, 'best': int(improved),
@@ -585,19 +725,18 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                                                      (('small', metrics.map_small), ('medium', metrics.map_medium),
                                                       ('large', metrics.map_large))))
             log(metrics.table(names))
-            wait = patience(schedule.end) if callable(patience) else patience
-            if phase == 'flat' and wait is not None and stale >= wait and epoch + 1 < schedule.final_start:
-                schedule.final_start, early = epoch + 1, True
-                train_set.set_epochs(schedule.end)
-                back = r['restore_best'] and best_epoch < epoch
-                if back:
-                    _restore_best(run / 'weights' / 'best.pt', net, ema)
+            if stopped:
                 log(f'no improvement for {wait} epochs: '
                     + (f'back to the weights of the best epoch ({best_epoch + 1}), ' if back else '')
                     + f'starting the final learning-rate decay ({schedule.final_epochs} epochs, ends at epoch {schedule.end})')
             if budget is not None:
-                log(f'time: {budget.remaining() / 60:.1f} min left for epochs, ~{budget.epoch_s:.0f}s each · '
-                    f'training ends at epoch {schedule.end}' + (f' (was {before})' if schedule.end != before else ''))
+                log(f'time: {budget.remaining() / 60:.1f} min left for epochs ({100 * budget.fraction():.0f} % used), '
+                    f'~{budget.epoch_s:.0f}s each · training ends at epoch {schedule.end}'
+                    + (f' (was {before})' if schedule.end != before else ''))
+                if had_mosaic and not mosaic and epoch + 1 < schedule.end:
+                    log(f'time: no more mosaic from epoch {epoch + 2}')
+                if had_clean is None and clean_from is not None and epoch + 1 < schedule.end:
+                    log(f'time: clean images from epoch {clean_from + 1}')
                 if epoch + 1 == 1 and schedule.end == 1:
                     log('warning: the first epoch used up the time budget; training ends without a clean epoch')
             if save_state:
@@ -606,7 +745,9 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
                             'ema_updates': ema.updates, 'optimizer': optimizer.state_dict(), 'scaler': scaler.state_dict(),
                             'final_start': schedule.final_start, 'best_fitness': best_fitness, 'best_epoch': best_epoch,
                             'stale': stale, 'micro': micro, 'args': args, 'final_epochs': schedule.final_epochs,
-                            'warmup': schedule.warmup, 'clean_from': clean_from, 'mosaic_end': train_set.mosaic_end,
+                            'warmup': schedule.warmup, 'decay_from': schedule.decay_from, 'decay_p0': schedule.decay_p0,
+                            'warmup_from': schedule.warmup_from, 'warmup_f0': schedule.warmup_f0,
+                            'clean_from': clean_from, 'mosaic': mosaic, 'early': early,
                             'budget': budget.state() if budget is not None else None}, tmp)
                 os.replace(tmp, run / 'weights' / 'state.pt')
             epoch += 1
