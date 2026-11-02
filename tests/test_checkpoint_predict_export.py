@@ -5,12 +5,14 @@ import json
 
 import numpy as np
 import onnx
+from onnx import numpy_helper
 import pytest
 import torch
 from PIL import Image
 
 from rpod import RPOD
 from rpod.cfg.schema import SIZES, Architecture, derive
+from rpod.engine.exporter import _check
 from rpod.engine.predictor import postprocess
 from rpod.nn import Detector
 from rpod.utils.checkpoint import load_weights
@@ -72,6 +74,23 @@ def test_export_contract(trained_ckpt):
     assert cfg['task_specific']['classes'] == {'0': 'scratch', '1': 'screw', '2': 'label'}
     assert cfg['task_specific']['confidence'] == 0.01 and cfg['common']['model_name'] == 'rpod-s'
 
+
+
+def test_export_check_tolerates_rounding_but_not_a_broken_graph(trained_ckpt, tmp_path):
+    m = RPOD(trained_ckpt)
+    onnx_path = m.export(tmp_path / 'ok') / 'model.onnx'        # passes the check on the way out
+    x = torch.rand(1, 3, *m.imgsz)
+    reference = m.net.cpu().eval()
+    _check(onnx_path, reference, x)
+    model = onnx.load(str(onnx_path))
+    for init in model.graph.initializer:                         # every weight off by 10 %: a broken export
+        w = numpy_helper.to_array(init)
+        if w.dtype == np.float32 and w.size > 1:
+            init.CopyFrom(numpy_helper.from_array(w * 1.1, init.name))
+    broken = tmp_path / 'broken.onnx'
+    onnx.save(model, str(broken))
+    with pytest.raises(RuntimeError, match='differs from PyTorch'):
+        _check(broken, reference, x)
 
 def test_a_pretrained_model_initializes_the_same_size_for_other_classes():
     src = make_net(num_classes=80)                                           # e.g. the COCO pretraining of s

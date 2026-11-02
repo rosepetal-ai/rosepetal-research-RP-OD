@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rpod"
-version = "0.2.1"
+version = "0.2.2"
 description = "Real-time object detector: a dense head proposes, a DETR-style decoder refines. No NMS."
 readme = "README.md"
 requires-python = ">=3.10"
