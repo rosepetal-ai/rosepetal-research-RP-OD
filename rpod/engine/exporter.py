@@ -42,8 +42,11 @@ def platform_config(model_name, names, imgsz, threshold):
     }
 
 
-def export_onnx(net, model_name, names, imgsz, threshold, output_dir, check=True):
-    """model_name: the size ('s', 'm', 'l'); config.json names the model rpod-<size>."""
+def export_onnx(net, model_name, names, imgsz, threshold, output_dir, check=False):
+    """model_name: the size ('s', 'm', 'l'); config.json names the model rpod-<size>.
+
+    check: compare the export with PyTorch (_check). Off by default for now: the first version rejected a correct
+    size-l export, and a failed check leaves a training with no ONNX at all."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     onnx_path = output_dir / 'model.onnx'

@@ -78,7 +78,7 @@ def test_export_contract(trained_ckpt):
 
 def test_export_check_tolerates_rounding_but_not_a_broken_graph(trained_ckpt, tmp_path):
     m = RPOD(trained_ckpt)
-    onnx_path = m.export(tmp_path / 'ok') / 'model.onnx'        # passes the check on the way out
+    onnx_path = m.export(tmp_path / 'ok') / 'model.onnx'
     x = torch.rand(1, 3, *m.imgsz)
     reference = m.net.cpu().eval()
     _check(onnx_path, reference, x)
