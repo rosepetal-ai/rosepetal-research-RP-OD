@@ -92,7 +92,7 @@ class RPOD:
     # -------------------------------------------------------------------------------------------- train / validate
     def train(self, data, imgsz=640, epochs=150, patience=20, batch=4, device=None, augment=default_augment,
               name='exp', multiscale=False, pretrained=True, time=None, reserve=None, final_eval=True,
-              project='runs/train', workers=None):
+              project='runs/train', workers=None, oversample=None):
         """Train on a YOLO dataset (data.yaml). Afterwards this object is the best model (runs/train/<name>/weights/best.pt).
 
         imgsz: int or [height, width], rounded up to multiples of 32; it is the size used in production too.
@@ -103,8 +103,10 @@ class RPOD:
             4 by default: more optimizer steps per epoch trained clearly better on small datasets.
         augment: function(sample, ctx) -> sample applied to training images before the letterbox. By default the
             recipe of the COCO pretraining (rpod.data.augment: mosaic in the first quarter of the epochs, photometric
-            distortion, zoom-out, crop, flip, clean images at the end; phases scale with the epochs). None: no
-            augmentation. Any other function replaces it (contract in rpod.data.dataset).
+            distortion, zoom-out, crop, flip, clean images at the end; phases scale with the epochs).
+            rpod.data.Augment(...) is the same recipe with other probabilities or phases, e.g. Augment(hflip=0.0,
+            mosaic_fraction=0.4). None: no augmentation. Any other function replaces it (contract in
+            rpod.data.dataset).
         multiscale: train every batch at a random size, height and width drawn separately: from 0.5x to 1.5x imgsz in
             the first quarter of the epochs, from 0.75x to 1.25x until the last sixth, then at imgsz; the model learns
             objects at more scales and shapes. Validation and production stay at imgsz.
@@ -120,6 +122,9 @@ class RPOD:
             'val_s_per_image'} measured on this run.
         final_eval: False skips the final evaluation of the best weights on val and test: they are still loaded and
             adopted, 'val' and 'test' come back None.
+        oversample: images with rare classes repeated in every epoch (LVIS repeat-factor sampling), None for none. A
+            class in a share f of the training images gets the factor sqrt(oversample / f) (at least 1); an image is
+            repeated by the highest factor of its classes. 0.3 is the LVIS value; higher repeats more classes, more.
         project / workers: the run goes to <project>/<name> (with a number added if it exists); dataloader workers
             (default: RPOD_WORKERS, else up to 8).
         Returns {'dir', 'best_epoch', 'val', 'test', 'planned_epochs', 'stop_reason', 'budget_overrun_s'}: the final
@@ -139,7 +144,7 @@ class RPOD:
             patience = int(patience)
         return _train(self, data, _size(imgsz), int(epochs), patience, int(batch), device or _default_device(),
                       augment, name, project=project, workers=workers, multiscale=multiscale, budget=budget,
-                      final_eval=final_eval)
+                      final_eval=final_eval, oversample=oversample)
 
     def val(self, data=None, split='val', device=None, batch=16, name='exp'):
         """Metrics and plots (runs/val/<name>) on a split of the training dataset or of another dataset with the same

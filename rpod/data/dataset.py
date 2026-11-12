@@ -21,6 +21,9 @@ another function, for example from an augmentation library:
         # ctx.imgsz      [height, width] the image will be letterboxed into
         # ctx.rng        numpy random generator for this sample
         return sample   # any size: the letterbox comes after
+
+An augmentation with attributes mosaic_fraction / clean_fraction (rpod.data.augment.Augment) sets those phases for the
+trainer too: its clean stretch from the best weights and, with a time budget, its ctx.mosaic / ctx.clean.
 """
 import math
 import multiprocessing as mp
