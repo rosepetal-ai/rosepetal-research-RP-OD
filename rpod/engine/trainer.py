@@ -35,7 +35,6 @@ from torch.utils.data import DataLoader
 
 from ..cfg.schema import check_input_size, derive, from_dict, positions, queries_for, to_dict
 from ..data import DetectionDataset, MultiScaleBatchSampler, check_dataset, collate
-from ..data.augment import MOSAIC_FRACTION
 from ..data.check import format_problems
 from ..loss import HungarianMatcher, SetCriterion
 from ..nn import Detector
@@ -44,7 +43,8 @@ from .validator import validate
 
 RECIPE = dict(lr=1e-4, backbone_lr=1e-4, weight_decay=1e-4, betas=(0.9, 0.999), warmup_steps=2000, warmup_max_fraction=0.05,
               final_fraction=0.2, final_lr_ratio=0.05, ema_decay=0.9999, ema_tau=2000, clip_grad=0.1,
-              freeze_backbone_bn_below=8, clean_fraction=0.04, restore_best=True, seed=0)
+              freeze_backbone_bn_below=8, mosaic_fraction=0.25, clean_fraction=0.04, restore_best=True,
+              seed=0)
 PROGRESS_SECONDS = 120      # one progress line this often inside an epoch (none in epochs shorter than this)
 CSV_FIELDS = ['epoch', 'phase', 'lr', 'loss', 'cls', 'bbox', 'giou', 'map50_95', 'map50', 'map_small', 'map_medium',
               'map_large', 'precision', 'recall', 'f1',
@@ -270,12 +270,12 @@ def _plan_epoch(budget, schedule, done, cap, clean_from, mosaic, early, r):
 
     Training only stops between epochs, and the last epoch is always clean, so the next one is the last when it and a
     clean one do not both fit. The phases go by the share of the time at the middle of the next epoch: mosaic before
-    MOSAIC_FRACTION, the final decay from 1 - final_fraction, clean from 1 - clean_fraction. A phase never comes back
+    mosaic_fraction, the final decay from 1 - final_fraction, clean from 1 - clean_fraction. A phase never comes back
     once over: the mosaic stays off, the decay and the clean stretch only end sooner or later with the time left (the
     decay without a jump in the learning rate). After patience (`early`) time can only bring the end forward."""
     left, clean_s = budget.remaining(), budget.cost('clean')
     in_clean = clean_from is not None and clean_from < done
-    mosaic = mosaic and not in_clean and budget.fraction(budget.cost('mosaic') / 2) < MOSAIC_FRACTION
+    mosaic = mosaic and not in_clean and budget.fraction(budget.cost('mosaic') / 2) < r['mosaic_fraction']
     next_s = clean_s if in_clean else budget.cost('mosaic' if mosaic else 'plain')
     if done >= cap or left < clean_s:
         n = 0
@@ -436,8 +436,26 @@ def _run_dir(project, name):
     return path
 
 
+def repeat_factor_sample(records, num_classes, threshold):
+    """records with each repeated round(r) times, r = the highest of max(1, sqrt(threshold / f_c)) over the classes c in
+    it, f_c the share of the records holding class c (LVIS repeat-factor sampling)."""
+    if not 0 < threshold <= 1:
+        raise ValueError(f'oversample must be between 0 and 1, got {threshold}')
+    holds = [set(np.asarray(rec['cls']).tolist()) for rec in records]
+    share = np.bincount([c for h in holds for c in h], minlength=num_classes) / max(1, len(records))
+    factor = np.sqrt(threshold / np.maximum(share, 1e-12)).clip(min=1)
+    return [rec for rec, h in zip(records, holds) for _ in range(round(max([1.0] + [factor[c] for c in h])))]
+
+
+def _describe(augment):
+    """The augmentation as args.yaml records it: its settings, or its name."""
+    if augment is None:
+        return None
+    return augment.to_dict() if hasattr(augment, 'to_dict') else getattr(augment, '__name__', type(augment).__name__)
+
+
 def train(model, data, imgsz, epochs, patience, batch, device, augment, name, project='runs/train', workers=None,
-          save_state=False, resume=None, multiscale=False, budget=None, final_eval=True):
+          save_state=False, resume=None, multiscale=False, budget=None, final_eval=True, oversample=None):
     """Trains `model` (an RPOD) in place and returns {'dir', 'best_epoch', 'val', 'test', 'planned_epochs',
     'stop_reason', 'budget_overrun_s'}.
 
@@ -457,10 +475,17 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     at imgsz (rpod.data.dataset.MULTISCALE); validation is always at imgsz. The batch is split into accumulation steps
     by its size: whole when it fits, in pieces at the largest sizes.
 
+    oversample: repeat-factor sampling (LVIS) of the training images, None for none: a class in a share f of the images
+    gets the factor max(1, sqrt(oversample / f)), and every image is repeated round(the highest factor of its classes)
+    times in each epoch. 0.3 put the rare defects of a 628-image dataset in 824 images per epoch.
+
+    The augmentation may declare its phases (mosaic_fraction, clean_fraction, as rpod.data.augment.Augment does): the
+    clean stretch and the time planning follow them, so they stay the same phases; otherwise RECIPE's.
+
     save_state: also write weights/state.pt after every epoch (optimizer, EMA, schedule, best so far), so a long run
     that gets interrupted can continue with resume=<that file> and the same arguments. Not part of RPOD.train.
     """
-    r = RECIPE
+    r = dict(RECIPE, **{k: getattr(augment, k) for k in ('mosaic_fraction', 'clean_fraction') if hasattr(augment, k)})
     if budget is not None and multiscale:
         raise ValueError('a time budget does not support multiscale yet: its phases are fixed when training starts')
     state = torch.load(resume, map_location='cpu', weights_only=True) if resume else None
@@ -499,7 +524,12 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     matcher = HungarianMatcher()
     criterion = SetCriterion(len(names), matcher)
 
-    train_set = DetectionDataset(ds['records']['train'], imgsz, len(names), augment, epochs=epochs, seed=r['seed'])
+    records = ds['records']['train']
+    if oversample:
+        records = repeat_factor_sample(records, len(names), oversample)
+        log(f'oversample {oversample}: train {len(ds["records"]["train"])} -> {len(records)} images per epoch')
+    train_set = DetectionDataset(records, imgsz, len(names), augment, pool=ds['records']['train'], epochs=epochs,
+                                 seed=r['seed'])
     val_set = DetectionDataset(ds['records']['val'], imgsz, len(names))
     sampler = None
     if multiscale:            # whole batches; the smallest side still leaves the decoder enough candidate positions
@@ -549,7 +579,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
         schedule.final_start = state['final_start']
         best_fitness, best_epoch, stale, epoch = state['best_fitness'], state['best_epoch'], state['stale'], state['epoch']
     clean_from, early = None, False           # clean_from: first clean epoch, fixed once it has started
-    mosaic = True                             # time mode: the mosaic is on until the budget turns it off for good
+    mosaic = r['mosaic_fraction'] > 0         # time mode: the mosaic is on until the budget turns it off for good
     if budget is not None and epochs == 1:
         clean_from = 0                        # the only epoch is the last one, clean as in epoch mode
     if state and budget is not None:
@@ -568,7 +598,7 @@ def train(model, data, imgsz, epochs, patience, batch, device, augment, name, pr
     args = {'data': str(Path(data).resolve()), 'imgsz': list(imgsz), 'epochs': epochs,
             'patience': getattr(patience, '__name__', 'function') if callable(patience) else patience,
             'time': budget.seconds if budget is not None else None, 'batch': batch,
-            'device': str(device), 'augment': getattr(augment, '__name__', None) if augment else None, 'name': run.name,
+            'device': str(device), 'augment': _describe(augment), 'oversample': oversample, 'name': run.name,
             'model': to_dict(model.cfg), 'classes': names, 'num_queries': num_queries, 'micro_batch': micro,
             'accumulate': accumulate, 'backbone_bn_frozen': freeze_bn, 'multiscale': bool(multiscale), 'recipe': {k: list(v) if isinstance(v, tuple) else v
                                                                                    for k, v in r.items()}}

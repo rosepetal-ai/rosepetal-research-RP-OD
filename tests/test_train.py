@@ -8,8 +8,11 @@ import pytest
 import torch
 import yaml
 
+import rpod.data.augment as A
+
 from rpod import RPOD
-from rpod.engine.trainer import RECIPE, ModelEMA, Schedule, _clean_start, _param_groups, _restore_best
+from rpod.engine.trainer import (RECIPE, ModelEMA, Schedule, _clean_start, _param_groups, _restore_best,
+                                 repeat_factor_sample)
 from rpod.loss import SetCriterion
 
 from .conftest import make_net
@@ -73,7 +76,7 @@ def test_train_end_to_end(tmp_path, monkeypatch, capsys):
     assert 1 <= len(rows) <= 3 and {'map50_95', 'recall', 'fitness', 'threshold', 'phase'} <= rows[0].keys()
     args = yaml.safe_load(open(run / 'args.yaml'))
     assert args['micro_batch'] == 2 and args['accumulate'] == 1 and args['classes'] == {0: 'scratch', 1: 'screw', 2: 'label'}
-    assert args['augment'] == 'default_augment'
+    assert args['augment'] == A.default_augment.to_dict() and args['oversample'] is None
     for f in ('weights/best.pt', 'weights/last.pt', 'val/pr_curves.png', 'val/confusion_matrix.png', 'val/predictions.jpg',
               'test/metrics.json'):
         assert (run / f).exists(), f
@@ -248,3 +251,25 @@ def test_multiscale_batches_are_split_in_pieces():
     from rpod.engine.trainer import _split
     batch = (torch.zeros(8, 3, 4, 4), [{}] * 8, [{}] * 8)
     assert [len(p[0]) for p in _split(batch, 3)] == [3, 3, 2] and len(_split(batch, 20)) == 1
+
+
+def test_oversample_repeats_the_images_of_rare_classes():
+    common = [{'cls': np.array([0])} for _ in range(97)]
+    rare = [{'cls': np.array([0, 1])} for _ in range(3)]             # class 1 in 3 % of the images
+    out = repeat_factor_sample(common + rare, 2, 0.3)
+    assert len(out) == 97 + 3 * 3                                     # sqrt(0.3 / 0.03) = 3.16 -> 3 times each
+    assert repeat_factor_sample(common + rare, 2, 0.01) == common + rare   # nothing that rare: as it was
+    with pytest.raises(ValueError):
+        repeat_factor_sample(common, 2, 1.5)
+
+
+def test_train_with_settings_and_oversample(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv('RPOD_WORKERS', '0')
+    monkeypatch.chdir(tmp_path)
+    data = make_dataset(tmp_path / 'data', {'train': 4, 'val': 1})
+    augment = A.Augment(hflip=0.0, clean_fraction=0.5)
+    res = RPOD('s').train(data, imgsz=128, epochs=2, patience=None, batch=2, device='cpu', augment=augment,
+                          pretrained=False, oversample=0.9, final_eval=False)
+    args = yaml.safe_load(open(res['dir'] / 'args.yaml'))
+    assert args['augment'] == augment.to_dict() and args['oversample'] == 0.9
+    assert 'oversample 0.9: train 4 ->' in capsys.readouterr().out

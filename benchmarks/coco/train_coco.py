@@ -69,10 +69,10 @@ trainer.queries_for = lambda max_objects: QUERIES
 trainer.RECIPE['lr'] = a.lr if a.lr is not None else SIZE_LR[a.size][0]
 trainer.RECIPE['backbone_lr'] = a.backbone_lr if a.backbone_lr is not None else SIZE_LR[a.size][1]
 trainer.RECIPE['final_fraction'] = a.final_fraction
-augment_module.P_MOSAIC = 0.5 if a.mosaic else 0.0
+augment = augment_module.Augment(mosaic=0.5 if a.mosaic else 0.0)
 trainer.RECIPE['mosaic'] = a.mosaic                 # recorded in args.yaml and the resumable state
 model = RPOD(a.size)
 if a.init:
     model.net = RPOD(a.init).net      # the trainer loads what fits (fewer levels, blocks or layers) and logs a report
-trainer.train(model, a.data, [640, 640], a.epochs, a.epochs, a.batch, 'cuda', augment_module.default_augment, a.name,
+trainer.train(model, a.data, [640, 640], a.epochs, a.epochs, a.batch, 'cuda', augment, a.name,
               save_state=True, resume=a.resume, multiscale=bool(a.multiscale))

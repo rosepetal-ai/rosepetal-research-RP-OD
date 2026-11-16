@@ -9,11 +9,13 @@ patience starts the final learning-rate decay sooner (the trainer moves ctx.epoc
 any number of epochs. With a time budget the phases are fractions of the time instead, and the trainer tells every
 epoch's phase (ctx.mosaic, ctx.clean).
 
-  first MOSAIC_FRACTION (25 %)   mosaic with probability P_MOSAIC (0.5)
+  first mosaic_fraction (25 %)   mosaic with probability `mosaic` (0.5)
   every epoch but the last 4 %   photometric distortion 0.5, zoom-out 0.5 (not after a mosaic), IoU crop 0.8, flip 0.5
-  last NO_AUG_FRACTION (4 %)     clean images, at least one epoch (the same ones where multi-scale returns to imgsz)
+  last clean_fraction (4 %)      clean images, at least one epoch (the same ones where multi-scale returns to imgsz)
 
-The values are module attributes: `import rpod.data.augment as A; A.P_FLIP = 0.0` changes them for every run.
+The values are the fields of Augment; `default_augment = Augment()` is the recipe as measured, and another run takes
+another one, e.g. `RPOD.train(..., augment=Augment(hflip=0.0, mosaic_fraction=0.4))`. The trainer reads the two phase
+fractions from it, so its clean stretch (back to the best weights) and its time planning follow the same phases.
 
 The RT-DETR / D-FINE recipe: photometric distortion, zoom-out, IoU crop and horizontal flip, with a short clean phase
 at the end. A longer clean phase (10 %, 7 of 72 epochs) made the first COCO run overfit: training loss fell from 14.5
@@ -30,41 +32,65 @@ come the photometric distortion, the IoU crop and the flip, not the zoom-out (th
 Differences with the RT-DETR pipeline: the image is letterboxed (aspect ratio kept, like YOLO and like production)
 instead of stretched, and the zoom-out fill is the letterbox gray.
 """
+from dataclasses import asdict, dataclass
+
 import numpy as np
 from PIL import Image, ImageEnhance
 
 from .dataset import Sample
 
-P_PHOTOMETRIC, P_ZOOM_OUT, P_IOU_CROP, P_FLIP = 0.5, 0.5, 0.8, 0.5
-P_MOSAIC = 0.5                                       # benchmarks/coco/train_coco.py --mosaic 0 sets 0
-MOSAIC_FRACTION = 0.25                               # first quarter of the epochs = rpod's widest multi-scale phase
-ZOOM_OUT_MAX = 4.0                                   # canvas up to 4x the image side
 FILL = 114                                           # same gray as the letterbox padding
 CROP_SCALE, CROP_ASPECT, CROP_TRIALS = (0.3, 1.0), (0.5, 2.0), 40
 CROP_MIN_IOUS = (0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0)  # SSD sampler; 1.0 means "no crop this time"
-NO_AUG_FRACTION = 0.04                               # = the trainer's clean_fraction
 
 
-def default_augment(sample, ctx):
-    """function(sample, ctx) -> sample for RPOD.train (see the module docstring)."""
-    clean = getattr(ctx, 'clean', None)
-    if ctx.epoch >= ctx.epochs - max(1, round(NO_AUG_FRACTION * ctx.epochs)) if clean is None else clean:
+@dataclass(frozen=True)
+class Augment:
+    """function(sample, ctx) -> sample for RPOD.train (see the module docstring): probabilities and phase fractions."""
+    mosaic: float = 0.5                  # benchmarks/coco/train_coco.py --mosaic 0 sets 0
+    mosaic_fraction: float = 0.25        # first quarter of the epochs = rpod's widest multi-scale phase
+    photometric: float = 0.5
+    zoom_out: float = 0.5
+    zoom_out_max: float = 4.0            # canvas up to 4x the image side
+    iou_crop: float = 0.8
+    hflip: float = 0.5
+    clean_fraction: float = 0.04         # at least one epoch, whatever the fraction
+
+    def __post_init__(self):
+        for k in ('mosaic', 'photometric', 'zoom_out', 'iou_crop', 'hflip', 'mosaic_fraction', 'clean_fraction'):
+            if not 0.0 <= getattr(self, k) <= 1.0:
+                raise ValueError(f'augment {k} must be between 0 and 1, got {getattr(self, k)}')
+        if self.zoom_out_max < 1.0:
+            raise ValueError(f'augment zoom_out_max must be at least 1, got {self.zoom_out_max}')
+        if self.mosaic_fraction + self.clean_fraction > 1.0:
+            raise ValueError(f'the mosaic phase ({self.mosaic_fraction}) and the clean one ({self.clean_fraction}) '
+                             f'overlap: together they must be at most 1')
+
+    def __call__(self, sample, ctx):
+        clean = getattr(ctx, 'clean', None)
+        if ctx.epoch >= ctx.epochs - max(1, round(self.clean_fraction * ctx.epochs)) if clean is None else clean:
+            return sample
+        rng = ctx.rng
+        told = getattr(ctx, 'mosaic', None)
+        mosaic_phase = ctx.epoch < round(self.mosaic_fraction * ctx.epochs) if told is None else told
+        mosaic_done = mosaic_phase and rng.random() < self.mosaic
+        if mosaic_done:
+            sample = mosaic([sample] + ctx.sample(3), ctx.imgsz, rng)
+        if rng.random() < self.photometric:
+            sample = Sample(photometric(sample.image, rng), sample.boxes, sample.labels, sample.path)
+        if not mosaic_done and rng.random() < self.zoom_out:
+            sample = zoom_out(sample, rng, self.zoom_out_max)
+        if rng.random() < self.iou_crop:
+            sample = iou_crop(sample, rng)
+        if rng.random() < self.hflip:
+            sample = hflip(sample)
         return sample
-    rng = ctx.rng
-    told = getattr(ctx, 'mosaic', None)
-    mosaic_phase = ctx.epoch < round(MOSAIC_FRACTION * ctx.epochs) if told is None else told
-    mosaic_done = mosaic_phase and rng.random() < P_MOSAIC
-    if mosaic_done:
-        sample = mosaic([sample] + ctx.sample(3), ctx.imgsz, rng)
-    if rng.random() < P_PHOTOMETRIC:
-        sample = Sample(photometric(sample.image, rng), sample.boxes, sample.labels, sample.path)
-    if not mosaic_done and rng.random() < P_ZOOM_OUT:
-        sample = zoom_out(sample, rng)
-    if rng.random() < P_IOU_CROP:
-        sample = iou_crop(sample, rng)
-    if rng.random() < P_FLIP:
-        sample = hflip(sample)
-    return sample
+
+    def to_dict(self):
+        return asdict(self)
+
+
+default_augment = Augment()
 
 
 def photometric(image, rng):
@@ -110,10 +136,10 @@ def mosaic(samples, imgsz, rng):
     return Sample(canvas, np.concatenate(boxes).astype(np.float32), np.concatenate(labels), samples[0].path)
 
 
-def zoom_out(sample, rng):
-    """Place the image at a random spot of a canvas up to ZOOM_OUT_MAX times bigger."""
+def zoom_out(sample, rng, max_ratio=4.0):
+    """Place the image at a random spot of a canvas up to max_ratio times bigger."""
     h, w = sample.image.shape[:2]
-    r = rng.uniform(1.0, ZOOM_OUT_MAX)
+    r = rng.uniform(1.0, max_ratio)
     big_h, big_w = int(h * r), int(w * r)
     top, left = int(rng.uniform(0, big_h - h)), int(rng.uniform(0, big_w - w))
     canvas = np.full((big_h, big_w, 3), FILL, np.uint8)

@@ -4,9 +4,11 @@
 """The default augmentation (rpod.data.augment, the COCO recipe) keeps every box on its object, and its phases follow
 the end of training."""
 import inspect
+import pickle
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import yaml
 
 import rpod.data.augment as A
@@ -27,12 +29,11 @@ def scene():
     return Sample(image, boxes, np.arange(4), 'scene')
 
 
-def test_geometric_augmentations_keep_boxes_on_their_objects(monkeypatch):
-    monkeypatch.setattr(A, 'P_PHOTOMETRIC', 0.0)            # colors must stay exact to find the objects again
-    monkeypatch.setattr(A, 'P_MOSAIC', 0.0)                 # mosaic has its own test
+def test_geometric_augmentations_keep_boxes_on_their_objects():
+    augment = A.Augment(photometric=0.0, mosaic=0.0)        # colors exact to find the objects; mosaic has its own test
     seen = set()
     for i in range(300):
-        out = A.default_augment(scene(), SimpleNamespace(epoch=0, epochs=10, rng=np.random.default_rng(i)))
+        out = augment(scene(), SimpleNamespace(epoch=0, epochs=10, rng=np.random.default_rng(i)))
         h, w = out.image.shape[:2]
         seen.add((h, w))
         assert len(out.boxes) == len(out.labels)
@@ -50,19 +51,18 @@ def test_photometric_changes_colors_not_geometry():
     assert out.shape == s.image.shape and out.dtype == np.uint8
 
 
-def test_last_epochs_are_clean(monkeypatch):
-    monkeypatch.setattr(A, 'P_MOSAIC', 0.0)
+def test_last_epochs_are_clean():
+    augment = A.Augment(mosaic=0.0)
     s = scene()
     for epoch, epochs in ((96, 100), (99, 100), (69, 72), (5, 6)):           # last 4 %, at least one epoch
-        assert A.default_augment(s, SimpleNamespace(epoch=epoch, epochs=epochs, rng=np.random.default_rng(0))) is s
-    changed = [A.default_augment(s, SimpleNamespace(epoch=95, epochs=100, rng=np.random.default_rng(k))) is not s
+        assert augment(s, SimpleNamespace(epoch=epoch, epochs=epochs, rng=np.random.default_rng(0))) is s
+    changed = [augment(s, SimpleNamespace(epoch=95, epochs=100, rng=np.random.default_rng(k))) is not s
                for k in range(10)]
     assert any(changed)                                                        # epoch 95 of 100 still augments
 
 
 
-def test_mosaic_keeps_boxes_on_their_objects(monkeypatch):
-    monkeypatch.setattr(A, 'P_PHOTOMETRIC', 0.0)
+def test_mosaic_keeps_boxes_on_their_objects():
     for i in range(100):
         rng = np.random.default_rng(i)
         ctx = SimpleNamespace(epoch=0, epochs=10, rng=rng, imgsz=[160, 200], sample=lambda k: [scene() for _ in range(k)])
@@ -78,11 +78,10 @@ def test_mosaic_keeps_boxes_on_their_objects(monkeypatch):
 
 def test_mosaic_only_in_the_first_quarter(monkeypatch):
     calls = []
-    monkeypatch.setattr(A, 'P_MOSAIC', 1.0)
-    monkeypatch.setattr(A, 'P_PHOTOMETRIC', 0.0)
     monkeypatch.setattr(A, 'mosaic', lambda samples, imgsz, rng: calls.append(1) or samples[0])
+    augment = A.Augment(mosaic=1.0, photometric=0.0)
     for epoch in range(100):
-        A.default_augment(scene(), SimpleNamespace(epoch=epoch, epochs=100, rng=np.random.default_rng(epoch),
+        augment(scene(), SimpleNamespace(epoch=epoch, epochs=100, rng=np.random.default_rng(epoch),
                                                    imgsz=[160, 160], sample=lambda k: [scene() for _ in range(k)]))
     assert len(calls) == 25
 
@@ -118,3 +117,26 @@ def test_patience_moves_the_augmentation_end(tmp_path, monkeypatch):
                           pretrained=False)
     assert seen == {0: {10}, 1: {3}, 2: {3}}
     assert yaml.safe_load(open(res['dir'] / 'args.yaml'))['augment'] == 'record'
+
+
+def test_the_phases_follow_the_settings(monkeypatch):
+    calls = []
+    monkeypatch.setattr(A, 'mosaic', lambda samples, imgsz, rng: calls.append(1) or samples[0])
+    augment = A.Augment(mosaic=1.0, photometric=1.0, mosaic_fraction=0.4, clean_fraction=0.1)   # always a new sample
+    s = scene()
+    out = [augment(s, SimpleNamespace(epoch=e, epochs=100, rng=np.random.default_rng(e), imgsz=[160, 160],
+                                      sample=lambda k: [scene() for _ in range(k)])) for e in range(100)]
+    assert len(calls) == 40 and all(o is s for o in out[90:]) and not any(o is s for o in out[:90])
+
+
+def test_settings_are_checked_and_the_default_is_the_measured_recipe():
+    assert A.default_augment == A.Augment() and A.default_augment.to_dict() == dict(
+        mosaic=0.5, mosaic_fraction=0.25, photometric=0.5, zoom_out=0.5, zoom_out_max=4.0, iou_crop=0.8, hflip=0.5,
+        clean_fraction=0.04)
+    for bad in (dict(hflip=1.5), dict(mosaic=-0.1), dict(zoom_out_max=0.5), dict(mosaic_fraction=0.8, clean_fraction=0.3)):
+        with pytest.raises(ValueError):
+            A.Augment(**bad)
+
+
+def test_an_augment_crosses_to_the_dataloader_workers():
+    assert pickle.loads(pickle.dumps(A.Augment(hflip=0.0))) == A.Augment(hflip=0.0)

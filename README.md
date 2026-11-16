@@ -149,8 +149,21 @@ letterbox. Its phases are fractions of the training, so they scale with `epochs`
 model.train('parts.yaml', augment=None)          # no augmentation
 model.train('parts.yaml', augment=my_augment)    # your own function (contract under Datasets)
 
-import rpod.data.augment as A
-A.P_FLIP = 0.0                                   # change one value of the default recipe, e.g. no flips
+from rpod.data import Augment                    # the default recipe with other values, for this run
+model.train('parts.yaml', augment=Augment(hflip=0.0, mosaic_fraction=0.4, clean_fraction=0.1))
+```
+
+`Augment` fields: `mosaic`, `photometric`, `zoom_out`, `iou_crop`, `hflip` (probabilities), `zoom_out_max`, and the
+phases `mosaic_fraction` and `clean_fraction`, which the trainer follows too (its clean stretch from the best weights,
+its time planning).
+
+Rare classes can be oversampled (off by default): `oversample=0.3` repeats, in every epoch, the images holding classes
+that are in fewer than 30 % of the training images, by `sqrt(0.3 / share)` (LVIS repeat-factor sampling). On a
+628-image bottle dataset with four rare defects it took the epoch to 824 images and raised test mAP50-95 from 81.1 to
+81.9 (three seeds; the rare classes from 57.1 to 59.8).
+
+```python
+model.train('parts.yaml', oversample=0.3)
 ```
 
 Training for a time instead of a number of epochs:

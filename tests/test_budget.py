@@ -174,21 +174,21 @@ def test_the_warmup_shrinks_to_the_budget_from_where_it_is():
 
 def test_a_time_budget_sets_the_phase_of_the_augmentation(monkeypatch):
     calls = []
-    monkeypatch.setattr(A, 'P_MOSAIC', 1.0)
     monkeypatch.setattr(A, 'mosaic', lambda samples, imgsz, rng: calls.append(1) or samples[0])
+    augment = A.Augment(mosaic=1.0)
     sample = A.Sample(np.zeros((40, 40, 3), np.uint8), np.zeros((0, 4), np.float32), np.zeros(0, np.int64), 'x')
     ctx = SimpleNamespace(epoch=60, epochs=100, imgsz=[32, 32], rng=np.random.default_rng(0),
                           sample=lambda k: [sample] * k, mosaic=None, clean=None)
-    A.default_augment(sample, ctx)
+    augment(sample, ctx)
     assert calls == []                                           # epoch 60 of 100: past the mosaic share
     ctx.mosaic = True
-    A.default_augment(sample, ctx)
+    augment(sample, ctx)
     assert calls == [1]                                          # the budget says mosaic
     ctx.epoch, ctx.mosaic = 2, False
-    A.default_augment(sample, ctx)
+    augment(sample, ctx)
     assert calls == [1]
     ctx.clean = True
-    assert A.default_augment(sample, ctx) is sample
+    assert augment(sample, ctx) is sample
 
 
 class SteppedBudget(Budget):
@@ -241,3 +241,8 @@ def test_patience_none_or_a_function_of_the_planned_epochs(tmp_path, monkeypatch
     res = RPOD('s').train(data, imgsz=128, epochs=10, patience=lambda e: asked.append(e) or 0, batch=2, device='cpu',
                           pretrained=False, final_eval=False)
     assert asked[0] == 10 and res['stop_reason'] == 'EARLY_STOPPED' and res['planned_epochs'] == 3
+
+
+def test_the_mosaic_share_of_the_time_follows_the_augmentation():
+    b = budget(1000, mosaic=[7] * 36, plain=[2])                 # 25.4 %: past the default quarter
+    assert _plan_epoch(b, schedule(), 37, 100, None, True, False, dict(RECIPE, mosaic_fraction=0.4))[1] is True
