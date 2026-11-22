@@ -98,7 +98,7 @@ names: {0: scratch, 1: screw} # or a list
 ```
 
 - Labels live in the parallel `labels` folder (`images/train/a.jpg` → `labels/train/a.txt`), one line per object: `class cx cy w h`, normalized 0-1. A missing or empty label file is an image without objects.
-- Images: `.jpg`, `.jpeg`, `.png`, `.bmp`, `.tif`, `.tiff`, `.webp`, 8 bits per channel.
+- Images: `.jpg`, `.jpeg`, `.png`, `.bmp`, `.tif`, `.tiff`, `.webp`, 8-bit.
 
 Every image and label is checked once before training, and the result is cached (in `~/.cache/rpod/datasets`) until a file changes:
 
