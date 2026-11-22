@@ -107,7 +107,7 @@ Every image and label is checked once before training, and the result is cached 
 
 ```python
 from rpod.data import check_dataset
-ds = check_dataset('parts.yaml')      # raises with the full list of errors; returns the records, stats and warnings
+ds = check_dataset('parts.yaml')      # raises listing the errors (the first 50, then how many more); returns the records, stats and warnings
 ```
 
 ## Training
