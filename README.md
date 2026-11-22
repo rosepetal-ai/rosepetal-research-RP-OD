@@ -126,7 +126,7 @@ fixed (adjusted with experiments on a real dataset):
 | Stability | EMA of the weights (what is validated and saved), gradient clipping 0.1, mixed precision on GPU, no dropout |
 | Losses | classification: matchability-aware (MAL); boxes: L1 + GIoU, and on the edge distributions FGL + self-distillation from the last layer (DDF), on the union of the matches of all layers; on every decoder layer, the denoising queries and the dense head (every position, not only the selected ones) |
 | Batch | `batch` is the effective batch, 4 by default: if it does not fit in the GPU it is split into accumulation steps, shown in the log; backbone BatchNorm is frozen below 8 images per step |
-| Best epoch | highest 0.5 · mAP50-95 + 0.5 · recall (IoU ≥ 0.5, at the best-F1 threshold) |
+| Best epoch | highest mAP50-95 on validation; on a tie, the later epoch |
 
 Why these values: on a real dataset (77 training images), a backbone learning rate of 1e-4 instead of the usual
 1e-5 gave +0.12 mAP50-95 on validation, and batch 4 instead of 8 another +0.06 (confirmed with three seeds).
@@ -173,7 +173,8 @@ res = model.train('parts.yaml', time=30 * 60, epochs=500)   # 30 min for the who
 res['planned_epochs'], res['stop_reason']                   # 'TIME_BUDGET_REACHED', 'EPOCHS_COMPLETED' or 'EARLY_STOPPED'
 ```
 
-After every epoch rpod measures what an epoch costs (the mean of the last three, without the first) and projects how
+After every epoch rpod measures what an epoch costs (by kind: with mosaic, without, clean; the mean of the last three
+of each, the first epoch without its start-up steps) and projects how
 many fit in what is left: the final decay, the clean epochs and the end of the mosaic follow that projection. A phase
 that has started does not move back: the decay can only get shorter and the mosaic does not return. Training stops
 between epochs, never inside one, and only where one clean epoch from the best weights still fits. `reserve=` keeps
@@ -237,8 +238,8 @@ model.export()                                   # model.onnx + config.json, for
 ```
 
 `predict` letterboxes the image (aspect ratio kept, gray padding), which is the input the exported model expects too,
-and uses by default the confidence threshold recommended during validation. `export` fuses the neck for inference and
-checks the ONNX against PyTorch. The ONNX takes one letterboxed image (0-1 values) and returns the boxes and class
+and uses by default the confidence threshold recommended during validation. `export` fuses the neck for inference.
+The ONNX takes one letterboxed image (0-1 values) and returns the boxes and class
 logits of every query, with no NMS to add; `config.json` holds the classes, input size and recommended threshold
 (contract in `rpod/engine/exporter.py`).
 
@@ -284,6 +285,14 @@ for training that size on other datasets.
 ```bash
 python3 -m pytest tests -q
 ```
+
+## Documentation
+
+- [docs/index.md](docs/index.md): the landing page of the documentation, with the content of this README plus the
+  arguments of `train`, the dataset checks and the ONNX contract.
+- [docs/ORIGINS.md](docs/ORIGINS.md): which part of RP-OD comes from which detector, and what it does differently.
+
+The same pages are published at <https://docs.rosepetal.ai/research/rp-od>.
 
 ## License
 
